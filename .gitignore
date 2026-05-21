@@ -29,6 +29,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+cookies.txt
+page_debug.html
+render_data.json
+downloaded_videos/
 
 # env files (can opt-in for committing if needed)
 .env*
