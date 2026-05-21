@@ -807,54 +807,6 @@ export default function Home() {
     }
   };
 
-  // ==========================================
-  // 9. 备份与还原
-  // ==========================================
-  const handleExportBackup = () => {
-    const backupData = { ipPosition, cases: cases.map(stripEmbeddedCaseAsset), materials: materials.map(stripEmbeddedMaterialVideo), performance };
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupData, null, 2));
-    const dl = document.createElement("a");
-    dl.setAttribute("href", dataStr);
-    dl.setAttribute("download", `老黄AI经营IP资产全量备份_${new Date().toISOString().slice(0, 10)}.json`);
-    document.body.appendChild(dl);
-    dl.click();
-    dl.remove();
-    showToast("数字资产已全量导出备份！", "success");
-  };
-
-  const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const reader = new FileReader();
-    if (e.target.files && e.target.files[0]) {
-      reader.readAsText(e.target.files[0], "UTF-8");
-      reader.onload = (event) => {
-        try {
-          const parsed = JSON.parse(event.target?.result as string);
-          if (parsed && typeof parsed === "object") {
-            if (parsed.ipPosition) {
-              setIpPosition(parsed.ipPosition);
-              localStorage.setItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.ipPositioning), JSON.stringify(parsed.ipPosition));
-            }
-            if (Array.isArray(parsed.cases)) {
-              setCases(parsed.cases);
-              persistCases(storageScope, parsed.cases);
-            }
-            if (Array.isArray(parsed.materials)) {
-              setMaterials(parsed.materials);
-              persistMaterials(storageScope, parsed.materials);
-            }
-            if (Array.isArray(parsed.performance)) {
-              setPerformance(parsed.performance);
-              localStorage.setItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.performance), JSON.stringify(parsed.performance));
-            }
-            showToast("全套数字资产已成功导入还原！", "success");
-          }
-        } catch {
-          showToast("备份格式有损，导入失败", "error");
-        }
-      };
-    }
-  };
-
   const dataURLtoBlob = (dataurl: string) => {
     try {
       const arr = dataurl.split(',');
@@ -1628,7 +1580,7 @@ ${ctaText}`;
               </button>
             </div>
 
-            {/* 云端多维表与备份 */}
+            {/* 云端多维表 */}
             <div className="flex gap-2 shrink-0 border-l border-slate-200 pl-3">
               <button
                 onClick={() => setShowFeishuPanel(!showFeishuPanel)}
@@ -1639,24 +1591,6 @@ ${ctaText}`;
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                 </svg>
               </button>
-              <button
-                onClick={handleExportBackup}
-                className="p-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl transition-all cursor-pointer"
-                title="导出打包备份"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-              </button>
-              <label
-                className="p-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl transition-all cursor-pointer flex items-center justify-center"
-                title="导入还原资产备份"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                </svg>
-                <input type="file" accept=".json" onChange={handleImportBackup} className="hidden" />
-              </label>
             </div>
           </div>
         </div>
