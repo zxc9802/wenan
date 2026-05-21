@@ -1,5 +1,7 @@
 "use client";
 
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import { useState, useEffect } from "react";
 
 // ==========================================
@@ -108,6 +110,17 @@ interface AgentOutput {
     totalScore: number;       // 100
   };
   refinementSuggestions: string;
+}
+
+interface DeconstructionResult {
+  hook: string;
+  conflict: string;
+  emotion: string;
+  caseUsage: string;
+  goldenSentence: string;
+  conversion: string;
+  learnablePoints: string[];
+  forbiddenPoints: string[];
 }
 
 // ==========================================
@@ -257,8 +270,40 @@ const normalizeGeneratedOutput = (output: Partial<AgentOutput>, ctaText: string)
   }
 });
 
-const persistCases = (nextCases: CompanyCase[]) => {
-  localStorage.setItem("xz_company_cases", JSON.stringify(nextCases.map(stripEmbeddedCaseAsset)));
+const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+const LOCAL_DEV_USER_ID = "copywriting-agent-local-dev-user";
+const STORAGE_SCOPE_KEYS = {
+  ipPositioning: "xz_ip_positioning",
+  cases: "xz_company_cases",
+  materials: "xz_master_materials",
+  performance: "xz_performance_records",
+} as const;
+
+type SessionResponsePayload = {
+  data?: {
+    session?: {
+      user?: Record<string, unknown>;
+    } | null;
+  };
+  redirectUrl?: string;
+  message?: string;
+  error?: string;
+};
+
+const getScopedStorageKey = (storageScope: string, key: string) =>
+  `copywriting-agent:${storageScope || LOCAL_DEV_USER_ID}:${key}`;
+
+const normalizeSessionUserId = (payload: SessionResponsePayload | null) => {
+  const userId = payload?.data?.session?.user?.id;
+  return typeof userId === "string" && userId.trim() ? userId.trim() : LOCAL_DEV_USER_ID;
+};
+
+const persistCases = (storageScope: string, nextCases: CompanyCase[]) => {
+  localStorage.setItem(
+    getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.cases),
+    JSON.stringify(nextCases.map(stripEmbeddedCaseAsset))
+  );
 };
 
 const stripEmbeddedMaterialVideo = (material: MasterMaterial): MasterMaterial => ({
@@ -266,8 +311,11 @@ const stripEmbeddedMaterialVideo = (material: MasterMaterial): MasterMaterial =>
   videoSrc: material.videoSrc?.startsWith("data:video") ? "" : material.videoSrc,
 });
 
-const persistMaterials = (nextMaterials: MasterMaterial[]) => {
-  localStorage.setItem("xz_master_materials", JSON.stringify(nextMaterials.map(stripEmbeddedMaterialVideo)));
+const persistMaterials = (storageScope: string, nextMaterials: MasterMaterial[]) => {
+  localStorage.setItem(
+    getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.materials),
+    JSON.stringify(nextMaterials.map(stripEmbeddedMaterialVideo))
+  );
 };
 
 export default function Home() {
@@ -287,10 +335,10 @@ export default function Home() {
   const [isFeishuConnecting, setIsFeishuConnecting] = useState(false);
   const [showFeishuPanel, setShowFeishuPanel] = useState(false);
 
-  // 大模型配置状态
-  const [apiKey, setApiKey] = useState("");
-  const [apiBaseUrl, setApiBaseUrl] = useState("https://api.deepseek.com/v1");
-  const [apiModel, setApiModel] = useState("deepseek-chat");
+  // 大模型连接参数由服务端环境变量接管
+  const apiKey = "";
+  const apiBaseUrl = "";
+  const apiModel = "服务端内置模型";
 
   // 全局交互提示 Toast
   const [toast, setToast] = useState<{ show: boolean; message: string; type: "success" | "info" | "error" }>({
@@ -298,6 +346,8 @@ export default function Home() {
     message: "",
     type: "success"
   });
+  const [storageScope, setStorageScope] = useState(LOCAL_DEV_USER_ID);
+  const [isSessionLoading, setIsSessionLoading] = useState(true);
 
   // ==========================================
   // 4. 五步渐进工坊核心状态 (Workspace wizard states)
@@ -316,7 +366,7 @@ export default function Home() {
   const [isParsingVideo, setIsParsingVideo] = useState(false);
   const [parsingVideoStep, setParsingVideoStep] = useState("");
   const [uploadedVideoName, setUploadedVideoName] = useState("");
-  const [deconstructionResult, setDeconstructionResult] = useState<any>(null);
+  const [deconstructionResult, setDeconstructionResult] = useState<DeconstructionResult | null>(null);
   const [agentResult, setAgentResult] = useState<AgentOutput | null>(null);
 
   // 并排工坊与修改状态
@@ -338,7 +388,6 @@ export default function Home() {
   const [casePublicAssets, setCasePublicAssets] = useState("");
   const [caseConfidential, setCaseConfidential] = useState("");
   const [caseInsight, setCaseInsight] = useState("");
-  const [caseTitleInput, setCaseTitleInput] = useState("");
   const [caseTitles, setCaseTitles] = useState<string[]>([]);
   const [isAddingCase, setIsAddingCase] = useState(false);
 
@@ -381,56 +430,96 @@ export default function Home() {
   // 6. 统一持久化存储与加载 (Local Storage Sync)
   // ==========================================
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadSession() {
+      try {
+        const response = await fetch("/api/session", {
+          cache: "no-store",
+          credentials: "include",
+        });
+        const payload = await response.json().catch(() => null) as SessionResponsePayload | null;
+
+        if (response.status === 401 && payload?.redirectUrl) {
+          window.location.href = payload.redirectUrl;
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(payload?.message || payload?.error || "读取主站登录态失败");
+        }
+
+        if (!cancelled) {
+          setStorageScope(normalizeSessionUserId(payload));
+        }
+      } catch (error) {
+        console.warn("[copywriting-agent-sso] Failed to load session:", error);
+        if (!cancelled) {
+          setStorageScope(LOCAL_DEV_USER_ID);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsSessionLoading(false);
+        }
+      }
+    }
+
+    void loadSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isSessionLoading) return;
+
     // 载入 IP
-    const localIp = localStorage.getItem("xz_ip_positioning");
+    const localIp = localStorage.getItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.ipPositioning));
     if (localIp) {
-      try { setIpPosition(JSON.parse(localIp)); } catch (e) { setIpPosition(seedIpPositioning); }
+      try { setIpPosition(JSON.parse(localIp)); } catch { setIpPosition(seedIpPositioning); }
     } else {
-      localStorage.setItem("xz_ip_positioning", JSON.stringify(seedIpPositioning));
+      localStorage.setItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.ipPositioning), JSON.stringify(seedIpPositioning));
     }
 
     // 载入案例
-    const localCases = localStorage.getItem("xz_company_cases");
+    const localCases = localStorage.getItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.cases));
     if (localCases) {
       try {
         const parsed = JSON.parse(localCases);
         setCases(parsed);
         if (parsed.length > 0) setSelectedCaseId(parsed[0].id);
-      } catch (e) { setCases(seedCases); }
+      } catch { setCases(seedCases); }
     } else {
       setCases(seedCases);
       if (seedCases.length > 0) setSelectedCaseId(seedCases[0].id);
-      persistCases(seedCases);
+      persistCases(storageScope, seedCases);
     }
 
     // 载入素材
-    const localMats = localStorage.getItem("xz_master_materials");
+    const localMats = localStorage.getItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.materials));
     if (localMats) {
       try {
         const parsed = JSON.parse(localMats);
         setMaterials(parsed);
         if (parsed.length > 0) setSelectedMaterialId(parsed[0].id);
-      } catch (e) { setMaterials(seedMaterials); }
+      } catch { setMaterials(seedMaterials); }
     } else {
       setMaterials(seedMaterials);
       if (seedMaterials.length > 0) setSelectedMaterialId(seedMaterials[0].id);
-      persistMaterials(seedMaterials);
+      persistMaterials(storageScope, seedMaterials);
     }
 
     // 载入表现复盘
-    const localPerf = localStorage.getItem("xz_performance_records");
+    const localPerf = localStorage.getItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.performance));
     if (localPerf) {
-      try { setPerformance(JSON.parse(localPerf)); } catch (e) { setPerformance(seedPerformance); }
+      try { setPerformance(JSON.parse(localPerf)); } catch { setPerformance(seedPerformance); }
     } else {
       setPerformance(seedPerformance);
-      localStorage.setItem("xz_performance_records", JSON.stringify(seedPerformance));
+      localStorage.setItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.performance), JSON.stringify(seedPerformance));
     }
 
-    // 载入大模型配置
-    setApiKey(localStorage.getItem("xz_api_key") || "");
-    setApiBaseUrl(localStorage.getItem("xz_api_base_url") || "https://api.deepseek.com/v1");
-    setApiModel(localStorage.getItem("xz_api_model") || "deepseek-chat");
-  }, []);
+  }, [isSessionLoading, storageScope]);
 
   const showToast = (message: string, type: "success" | "info" | "error" = "success") => {
     setToast({ show: true, message, type });
@@ -492,19 +581,19 @@ export default function Home() {
           const d = result.data;
           if (d.ipPosition) {
             setIpPosition(d.ipPosition);
-            localStorage.setItem("xz_ip_positioning", JSON.stringify(d.ipPosition));
+            localStorage.setItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.ipPositioning), JSON.stringify(d.ipPosition));
           }
           if (d.cases && d.cases.length > 0) {
             setCases(d.cases);
-            persistCases(d.cases);
+            persistCases(storageScope, d.cases);
           }
           if (d.materials && d.materials.length > 0) {
             setMaterials(d.materials);
-            persistMaterials(d.materials);
+            persistMaterials(storageScope, d.materials);
           }
           if (d.performance && d.performance.length > 0) {
             setPerformance(d.performance);
-            localStorage.setItem("xz_performance_records", JSON.stringify(d.performance));
+            localStorage.setItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.performance), JSON.stringify(d.performance));
           }
           showToast("🎉 飞书云端资产已成功拉取，并回填至本地面板！", "success");
         } else {
@@ -513,8 +602,8 @@ export default function Home() {
       } else {
         showToast(`同步失败: ${result.error || "云端异常"}`, "error");
       }
-    } catch (err: any) {
-      showToast(`飞书同步请求出错: ${err.message}`, "error");
+    } catch (err) {
+      showToast(`飞书同步请求出错: ${getErrorMessage(err)}`, "error");
     } finally {
       setIsFeishuConnecting(false);
     }
@@ -525,7 +614,7 @@ export default function Home() {
   // ==========================================
   const handleSaveIpPositioning = (e: React.FormEvent) => {
     e.preventDefault();
-    localStorage.setItem("xz_ip_positioning", JSON.stringify(ipPosition));
+    localStorage.setItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.ipPositioning), JSON.stringify(ipPosition));
     showToast("IP定位库（文案方向盘）更新成功！", "success");
   };
 
@@ -582,7 +671,7 @@ export default function Home() {
     };
     const updated = [newCase, ...cases];
     setCases(updated);
-    persistCases(updated);
+    persistCases(storageScope, updated);
     setSelectedCaseId(newCase.id);
 
     setCaseName("");
@@ -607,7 +696,7 @@ export default function Home() {
     if (confirm("确定要移出该案例资产吗？")) {
       const updated = cases.filter(c => c.id !== id);
       setCases(updated);
-      persistCases(updated);
+      persistCases(storageScope, updated);
       showToast("案例已移出", "info");
     }
   };
@@ -637,7 +726,7 @@ export default function Home() {
     };
     const updated = [newMat, ...materials];
     setMaterials(updated);
-    persistMaterials(updated);
+    persistMaterials(storageScope, updated);
     setSelectedMaterialId(newMat.id);
 
     setMatAuthor("");
@@ -666,7 +755,7 @@ export default function Home() {
     if (confirm("确定要删除此视频拆解素材吗？")) {
       const updated = materials.filter(m => m.id !== id);
       setMaterials(updated);
-      persistMaterials(updated);
+      persistMaterials(storageScope, updated);
       showToast("参考素材已删除", "info");
     }
   };
@@ -694,7 +783,7 @@ export default function Home() {
     };
     const updated = [newPerf, ...performance];
     setPerformance(updated);
-    localStorage.setItem("xz_performance_records", JSON.stringify(updated));
+    localStorage.setItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.performance), JSON.stringify(updated));
 
     setPerfTitle("");
     setPerfViews(0);
@@ -713,7 +802,7 @@ export default function Home() {
     if (confirm("确定要删除此复盘记录吗？")) {
       const updated = performance.filter(p => p.id !== id);
       setPerformance(updated);
-      localStorage.setItem("xz_performance_records", JSON.stringify(updated));
+      localStorage.setItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.performance), JSON.stringify(updated));
       showToast("记录已删除", "info");
     }
   };
@@ -743,23 +832,23 @@ export default function Home() {
           if (parsed && typeof parsed === "object") {
             if (parsed.ipPosition) {
               setIpPosition(parsed.ipPosition);
-              localStorage.setItem("xz_ip_positioning", JSON.stringify(parsed.ipPosition));
+              localStorage.setItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.ipPositioning), JSON.stringify(parsed.ipPosition));
             }
             if (Array.isArray(parsed.cases)) {
               setCases(parsed.cases);
-              persistCases(parsed.cases);
+              persistCases(storageScope, parsed.cases);
             }
             if (Array.isArray(parsed.materials)) {
               setMaterials(parsed.materials);
-              persistMaterials(parsed.materials);
+              persistMaterials(storageScope, parsed.materials);
             }
             if (Array.isArray(parsed.performance)) {
               setPerformance(parsed.performance);
-              localStorage.setItem("xz_performance_records", JSON.stringify(parsed.performance));
+              localStorage.setItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.performance), JSON.stringify(parsed.performance));
             }
             showToast("全套数字资产已成功导入还原！", "success");
           }
-        } catch (error) {
+        } catch {
           showToast("备份格式有损，导入失败", "error");
         }
       };
@@ -822,7 +911,7 @@ export default function Home() {
     return fenced ? fenced[1].trim() : trimmed;
   };
 
-  const hasClientLlmConfig = () => apiKey.trim().length > 5;
+  const hasClientLlmConfig = () => false;
 
   const requestChatCompletion = async (
     messages: { role: "system" | "user" | "assistant"; content: string }[],
@@ -1006,20 +1095,12 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
           throw new Error(`API 响应失败 (状态码 ${response.status}): ${errBody.slice(0, 100)}`);
         }
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error("Video parse error:", err);
-      showToast(`大模型解析发生错误: ${err.message || err}`, "error");
+      showToast(`大模型解析发生错误: ${getErrorMessage(err)}`, "error");
     } finally {
       setIsParsingVideo(false);
     }
-  };
-
-  const handleSaveSettings = (e: React.FormEvent) => {
-    e.preventDefault();
-    localStorage.setItem("xz_api_key", apiKey);
-    localStorage.setItem("xz_api_base_url", apiBaseUrl);
-    localStorage.setItem("xz_api_model", apiModel);
-    showToast("大模型驱动引擎端点配置已成功保存！", "success");
   };
 
   // ==========================================
@@ -1067,14 +1148,14 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
       } else {
         throw new Error("API 响应失败");
       }
-    } catch (err) {
+    } catch {
       fallbackDeconstruction(refContent, selectedMat);
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const fallbackDeconstruction = (refContent: string, selectedMat: any) => {
+  const fallbackDeconstruction = (refContent: string, selectedMat: MasterMaterial | undefined) => {
     const mockDeconstruct = {
       hook: selectedMat?.videoVisualHook || `用“老板转型一开始就错了”的痛点作为开头，直戳中小企业主的虚假红利安全感。`,
       conflict: selectedMat?.videoConflictFriction || `揭示“花大钱买了一堆垃圾AI工具”与“公司内部业务连标准SOP流程都没有”的底层对立冲突。`,
@@ -1101,6 +1182,10 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
     const selectedCase = cases.find(c => c.id === selectedCaseId);
     if (!selectedCase) {
       showToast("请先选择一个真实的公司实战案例作为注入血肉！", "error");
+      return;
+    }
+    if (!deconstructionResult) {
+      showToast("请先完成爆款结构拆解，再进入文案生成链路。", "error");
       return;
     }
 
@@ -1239,8 +1324,8 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
       setCurrentStep(4);
       showToast("🎉 三步串联 AI 推理连已全部打通！原创高分稿件已产出。", "success");
 
-    } catch (err: any) {
-      showToast(`AI Chained 运行出错: ${err.message}，已自动激活本地装配引擎。`, "info");
+    } catch (err) {
+      showToast(`AI Chained 运行出错: ${getErrorMessage(err)}，已自动激活本地装配引擎。`, "info");
       fallbackGeneration(selectedCase, ctaText);
     } finally {
       setIsGenerating(false);
@@ -1301,10 +1386,21 @@ ${ctaText}`;
 
 ${ctaText}`;
 
+    const safeDeconstruction: DeconstructionResult = deconstructionResult || {
+      hook: "用老板经营痛点开场",
+      conflict: "工具投入与流程低效之间的冲突",
+      emotion: "从焦虑到清醒判断的推进",
+      caseUsage: "用真实案例承接观点",
+      goldenSentence: c.insight,
+      conversion: ctaText,
+      learnablePoints: ["极具攻击性的痛点开头", "实战人设的直白语气"],
+      forbiddenPoints: ["禁用原文红利词汇", "不要照搬原段落比喻"],
+    };
+
     const mockOutput: AgentOutput = {
-      structureBreakdown: deconstructionResult,
-      learnablePoints: deconstructionResult?.learnablePoints || ["极具攻击性的痛点开头", "实战人设的直白语气"],
-      forbiddenPoints: deconstructionResult?.forbiddenPoints || ["禁用原文红利词汇", "不要照搬原段落比喻"],
+      structureBreakdown: safeDeconstruction,
+      learnablePoints: safeDeconstruction.learnablePoints,
+      forbiddenPoints: safeDeconstruction.forbiddenPoints,
       coreInsight: c.insight,
       dyScript: {
         title: c.suggestedTitles[0] || `${c.name}，真正该先改的不是工具`,
@@ -1383,7 +1479,7 @@ ${ctaText}`;
 
     const updated = [newRecord, ...performance];
     setPerformance(updated);
-    localStorage.setItem("xz_performance_records", JSON.stringify(updated));
+    localStorage.setItem(getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.performance), JSON.stringify(updated));
 
     setIsFeishuConnecting(true);
     showToast("正在将已定稿的文案归档，同步至飞书内容复盘库...", "info");
@@ -1402,8 +1498,8 @@ ${ctaText}`;
       } else {
         showToast(`本地归档成功，飞书云端同步失败: ${result.error}`, "error");
       }
-    } catch (e: any) {
-      showToast(`云端同步失败: ${e.message}`, "error");
+    } catch (e) {
+      showToast(`云端同步失败: ${getErrorMessage(e)}`, "error");
     } finally {
       setIsFeishuConnecting(false);
     }
@@ -1418,6 +1514,16 @@ ${ctaText}`;
   // ==========================================
   // 12. 视图渲染 (Apple Glassmorphism UI)
   // ==========================================
+  if (isSessionLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50/70 text-slate-800 font-sans flex items-center justify-center">
+        <div className="rounded-3xl border border-white/60 bg-white/80 px-6 py-5 shadow-xl backdrop-blur-xl">
+          <p className="text-sm font-bold text-slate-700">正在校验主站登录态...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50/70 text-slate-800 font-sans selection:bg-indigo-600 selection:text-white pb-20 relative overflow-hidden antialiased">
 
@@ -2381,15 +2487,15 @@ ${ctaText}`;
 
             {/* 二级资产页签 */}
             <div className="flex border-b border-slate-200 mb-6 gap-2 overflow-x-auto">
-              {[
+              {([
                 { tab: "ip", label: "IP 定位配置表" },
                 { tab: "cases", label: `真实公司案例库 (${cases.length})` },
                 { tab: "materials", label: `优秀视频文案拆解 (${materials.length})` },
                 { tab: "performance", label: `每日发布效果复盘 (${performance.length})` }
-              ].map((sub) => (
+              ] satisfies { tab: typeof activeAssetTab; label: string }[]).map((sub) => (
                 <button
                   key={sub.tab}
-                  onClick={() => setActiveAssetTab(sub.tab as any)}
+                  onClick={() => setActiveAssetTab(sub.tab)}
                   className={`px-5 py-3 text-xs font-extrabold transition-all border-b-2 cursor-pointer -mb-[2px] shrink-0 ${
                     activeAssetTab === sub.tab
                       ? "border-indigo-600 text-indigo-600 scale-[1.01]"
@@ -3102,7 +3208,7 @@ ${ctaText}`;
                       <div>
                         <label className="block text-slate-400 mb-1">发布渠道</label>
                         <select
-                          value={perfPlatform} onChange={(e) => setPerfPlatform(e.target.value as any)}
+                          value={perfPlatform} onChange={(e) => setPerfPlatform(e.target.value as PerformanceRecord["platform"])}
                           className="block w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs"
                         >
                           <option value="抖音">抖音</option>
@@ -3175,7 +3281,7 @@ ${ctaText}`;
                       <div>
                         <label className="block text-slate-400 mb-1">效果判定决策</label>
                         <select
-                          value={perfJudgment} onChange={(e) => setPerfJudgment(e.target.value as any)}
+                          value={perfJudgment} onChange={(e) => setPerfJudgment(e.target.value as PerformanceRecord["judgment"])}
                           className="block w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs"
                         >
                           <option value="继续放大">继续放大 (复制骨架批量产出)</option>
@@ -3289,58 +3395,27 @@ ${ctaText}`;
               大模型多维重组生成引擎设置
             </h3>
             <p className="text-[10px] text-slate-400 mb-6 pl-10 font-semibold leading-relaxed">
-              在这里可以配置您的大模型 API 密钥。系统采用 client-side 直连通信，密钥仅存储在您的当前浏览器 local 中，保障 100% 隐私安全。
+              大模型连接参数已由服务端环境变量托管，前端不再采集、保存或直连传输密钥。
             </p>
 
-            <form onSubmit={handleSaveSettings} className="space-y-4 text-xs font-semibold text-slate-700">
-              <div>
-                <label className="block text-slate-500 mb-1.5 uppercase text-[9px] font-black">API Base URL (端点接口地址)</label>
-                <input
-                  type="text" placeholder="如：https://api.deepseek.com/v1 或 https://api.openai.com/v1"
-                  value={apiBaseUrl} onChange={(e) => setApiBaseUrl(e.target.value)}
-                  className="block w-full px-3.5 py-2.5 bg-white/70 border border-slate-200 rounded-xl font-bold focus:outline-none focus:border-indigo-600 text-slate-800"
-                />
+            <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 px-5 py-4 space-y-3 text-xs font-semibold">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-black text-emerald-700 uppercase">大模型配置已内置</p>
+                  <p className="text-[10px] text-emerald-700/70 font-semibold mt-1">
+                    文案生成、爆文拆解与审计调用都会通过服务端代理读取环境变量。
+                  </p>
+                </div>
+                <span className="shrink-0 px-3 py-1.5 rounded-full bg-white/80 text-[10px] font-black text-emerald-700 border border-emerald-100">
+                  服务端托管
+                </span>
               </div>
 
-              <div>
-                <label className="block text-slate-500 mb-1.5 uppercase text-[9px] font-black">API Model Name (具体模型参数名)</label>
-                <input
-                  type="text" placeholder="如：deepseek-chat 或 gpt-4o"
-                  value={apiModel} onChange={(e) => setApiModel(e.target.value)}
-                  className="block w-full px-3.5 py-2.5 bg-white/70 border border-slate-200 rounded-xl font-bold focus:outline-none focus:border-indigo-600 text-slate-800"
-                />
+              <div className="bg-white/70 border border-emerald-100 rounded-xl p-3 text-[10px] text-emerald-800/75 leading-relaxed">
+                后端会读取 <b>LLM_API_KEY</b> / <b>OPENAI_API_KEY</b> / <b>DEEPSEEK_API_KEY</b>，
+                模型与端点由 <b>LLM_MODEL</b>、<b>LLM_API_BASE_URL</b> 或对应 OpenAI 变量控制。
               </div>
-
-              <div>
-                <label className="block text-slate-500 mb-1.5 flex items-center justify-between uppercase text-[9px] font-black">
-                  <span>API Key (密钥口令)</span>
-                  <span className="text-[9px] text-slate-400 font-normal">留空将自动降级为本地高保真模拟重组引擎进行测试</span>
-                </label>
-                <input
-                  type="password" placeholder="sk-................................"
-                  value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-                  className="block w-full px-3.5 py-2.5 bg-white/70 border border-slate-200 rounded-xl font-bold focus:outline-none focus:border-indigo-600 text-slate-800"
-                />
-              </div>
-
-              <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-2 text-[10px] leading-relaxed font-semibold">
-                <span className="text-slate-400 block font-bold uppercase mb-1">💡 引擎推荐：</span>
-                <p className="text-slate-500">
-                  1. **推荐使用 DeepSeek API**：其具备极其低廉的价格与极致强悍的中文逻辑推理和文案重构能力，价格仅为 1 元/百万 Token。
-                  <br />
-                  2. **极速零配置测试**：如果不填 API Key，智能体工作台将自动降级并激活我们的<b>“本地高保真数据装配融合引擎”</b>，能够 100% 真实模拟案例与参考结构的智能注入效果，供您免 Key 高流畅测试。
-                </p>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-2">
-                <button
-                  type="submit"
-                  className="px-8 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 hover:shadow-lg hover:shadow-indigo-500/20 active:scale-[0.98] transition-all text-white rounded-xl font-black cursor-pointer shadow-md"
-                >
-                  保存驱动引擎配置
-                </button>
-              </div>
-            </form>
+            </div>
           </div>
         )}
       </main>

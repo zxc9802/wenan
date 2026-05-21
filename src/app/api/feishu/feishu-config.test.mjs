@@ -3,7 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 const pageSource = readFileSync(new URL("../../page.tsx", import.meta.url), "utf8");
-const routeSource = readFileSync(new URL("./sync/route.ts", import.meta.url), "utf8");
+const feishuRouteSource = readFileSync(new URL("./sync/route.ts", import.meta.url), "utf8");
+const llmRouteSource = readFileSync(new URL("../llm/chat/route.ts", import.meta.url), "utf8");
 
 test("Feishu connector fields are not rendered or stored by the front end", () => {
   [
@@ -27,7 +28,28 @@ test("Feishu connector fields are not rendered or stored by the front end", () =
 });
 
 test("Feishu sync route owns fixed connector configuration", () => {
-  assert.match(routeSource, /const FEISHU_CONFIG = /);
-  assert.match(routeSource, /process\.env\.FEISHU_APP_ID/);
-  assert.match(routeSource, /process\.env\.FEISHU_PERFORMANCE_TABLE_ID/);
+  assert.match(feishuRouteSource, /const FEISHU_CONFIG = /);
+  assert.match(feishuRouteSource, /process\.env\.FEISHU_APP_ID/);
+  assert.match(feishuRouteSource, /process\.env\.FEISHU_PERFORMANCE_TABLE_ID/);
+});
+
+test("LLM connector fields are not rendered or stored by the front end", () => {
+  [
+    "API Base URL",
+    "API Model Name",
+    "API Key",
+    "保存驱动引擎配置",
+    "client-side 直连",
+    "xz_api_key",
+    "xz_api_base_url",
+    "xz_api_model",
+  ].forEach((forbiddenText) => {
+    assert.equal(pageSource.includes(forbiddenText), false, `${forbiddenText} should not appear in page.tsx`);
+  });
+});
+
+test("LLM chat route owns server-side model configuration", () => {
+  assert.match(llmRouteSource, /process\.env\.LLM_API_KEY/);
+  assert.match(llmRouteSource, /process\.env\.LLM_API_BASE_URL/);
+  assert.match(llmRouteSource, /process\.env\.LLM_MODEL/);
 });

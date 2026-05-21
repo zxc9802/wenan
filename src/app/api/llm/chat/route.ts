@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { sessionErrorResponse } from "@/app/lib/server/app-session";
 
 type ChatRequestBody = {
   messages?: { role: "system" | "user" | "assistant"; content: string }[];
@@ -12,6 +13,9 @@ function cleanBaseUrl(value: string) {
 
 export async function POST(request: Request) {
   try {
+    const sessionError = await sessionErrorResponse(request);
+    if (sessionError) return sessionError;
+
     const body = (await request.json()) as ChatRequestBody;
     const apiKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY;
     const baseUrl = cleanBaseUrl(process.env.LLM_API_BASE_URL || process.env.OPENAI_BASE_URL || "https://api.deepseek.com/v1");

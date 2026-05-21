@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { sessionErrorResponse } from "@/app/lib/server/app-session";
 
 type UrlFieldValue = { link: string; text: string };
 type FieldValue = string | number | boolean | string[] | UrlFieldValue | null | undefined;
@@ -128,6 +129,9 @@ function errorMessage(error: unknown) {
 // 飞书云端多维表 (Lark Bitable) 同步中转代理
 export async function POST(request: Request) {
   try {
+    const sessionError = await sessionErrorResponse(request);
+    if (sessionError) return sessionError;
+
     const body = await request.json();
     const {
       action, // "pull" | "push"
