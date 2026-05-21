@@ -8,6 +8,16 @@ type BitableRecord = {
   fields: RecordFields;
 };
 
+const FEISHU_CONFIG = {
+  appId: process.env.FEISHU_APP_ID || "",
+  appSecret: process.env.FEISHU_APP_SECRET || "",
+  appToken: process.env.FEISHU_APP_TOKEN || process.env.FEISHU_BASE_APP_TOKEN || "",
+  ipTableId: process.env.FEISHU_IP_TABLE_ID || "",
+  casesTableId: process.env.FEISHU_CASES_TABLE_ID || "",
+  materialsTableId: process.env.FEISHU_MATERIALS_TABLE_ID || "",
+  performanceTableId: process.env.FEISHU_PERFORMANCE_TABLE_ID || "",
+};
+
 const FIELDS = {
   ip: {
     ipDefinition: ["IP一句话定位", "ip_definition"],
@@ -121,6 +131,13 @@ export async function POST(request: Request) {
     const body = await request.json();
     const {
       action, // "pull" | "push"
+      // 如果是 push，则携带需要同步回端的数据
+      ipPosition,
+      cases,
+      materials,
+      performance,
+    } = body;
+    const {
       appId,
       appSecret,
       appToken,
@@ -128,12 +145,7 @@ export async function POST(request: Request) {
       casesTableId,
       materialsTableId,
       performanceTableId,
-      // 如果是 push，则携带需要同步回端的数据
-      ipPosition,
-      cases,
-      materials,
-      performance,
-    } = body;
+    } = FEISHU_CONFIG;
 
     // 基础校验
     if (!appId || !appSecret || !appToken) {

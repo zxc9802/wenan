@@ -283,14 +283,7 @@ export default function Home() {
   const [materials, setMaterials] = useState<MasterMaterial[]>([]);
   const [performance, setPerformance] = useState<PerformanceRecord[]>([]);
 
-  // 飞书云同步配置状态
-  const [feishuAppId, setFeishuAppId] = useState("");
-  const [feishuAppSecret, setFeishuAppSecret] = useState("");
-  const [feishuAppToken, setFeishuAppToken] = useState("");
-  const [feishuIpTableId, setFeishuIpTableId] = useState("");
-  const [feishuCasesTableId, setFeishuCasesTableId] = useState("");
-  const [feishuMaterialsTableId, setFeishuMaterialsTableId] = useState("");
-  const [feishuPerformanceTableId, setFeishuPerformanceTableId] = useState("");
+  // 飞书云同步状态：连接参数由服务端固定配置接管
   const [isFeishuConnecting, setIsFeishuConnecting] = useState(false);
   const [showFeishuPanel, setShowFeishuPanel] = useState(false);
 
@@ -433,18 +426,10 @@ export default function Home() {
       localStorage.setItem("xz_performance_records", JSON.stringify(seedPerformance));
     }
 
-    // 载入大模型与飞书凭证
+    // 载入大模型配置
     setApiKey(localStorage.getItem("xz_api_key") || "");
     setApiBaseUrl(localStorage.getItem("xz_api_base_url") || "https://api.deepseek.com/v1");
     setApiModel(localStorage.getItem("xz_api_model") || "deepseek-chat");
-
-    setFeishuAppId(localStorage.getItem("xz_feishu_app_id") || "");
-    setFeishuAppSecret(localStorage.getItem("xz_feishu_app_secret") || "");
-    setFeishuAppToken(localStorage.getItem("xz_feishu_app_token") || "");
-    setFeishuIpTableId(localStorage.getItem("xz_feishu_ip_table_id") || "");
-    setFeishuCasesTableId(localStorage.getItem("xz_feishu_cases_table_id") || "");
-    setFeishuMaterialsTableId(localStorage.getItem("xz_feishu_materials_table_id") || "");
-    setFeishuPerformanceTableId(localStorage.getItem("xz_feishu_performance_table_id") || "");
   }, []);
 
   const showToast = (message: string, type: "success" | "info" | "error" = "success") => {
@@ -466,32 +451,12 @@ export default function Home() {
   // ==========================================
   // 7. 飞书云端多维表双向同步 (Lark Base Integrator)
   // ==========================================
-  const handleSaveFeishuConfig = (e: React.FormEvent) => {
-    e.preventDefault();
-    localStorage.setItem("xz_feishu_app_id", feishuAppId);
-    localStorage.setItem("xz_feishu_app_secret", feishuAppSecret);
-    localStorage.setItem("xz_feishu_app_token", feishuAppToken);
-    localStorage.setItem("xz_feishu_ip_table_id", feishuIpTableId);
-    localStorage.setItem("xz_feishu_cases_table_id", feishuCasesTableId);
-    localStorage.setItem("xz_feishu_materials_table_id", feishuMaterialsTableId);
-    localStorage.setItem("xz_feishu_performance_table_id", feishuPerformanceTableId);
-    showToast("飞书连接器凭证已成功保存在浏览器本地！", "success");
-  };
-
   const pushMaterialsToFeishu = async (nextMaterials: MasterMaterial[]) => {
-    if (!feishuAppId || !feishuAppSecret || !feishuAppToken || !feishuMaterialsTableId) {
-      return false;
-    }
-
     const res = await fetch("/api/feishu/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: "push",
-        appId: feishuAppId,
-        appSecret: feishuAppSecret,
-        appToken: feishuAppToken,
-        materialsTableId: feishuMaterialsTableId,
         materials: nextMaterials.map(stripEmbeddedMaterialVideo),
       }),
     });
@@ -503,24 +468,11 @@ export default function Home() {
   };
 
   const handleFeishuSync = async (direction: "pull" | "push") => {
-    if (!feishuAppId || !feishuAppSecret || !feishuAppToken) {
-      showToast("请先在上方连接器中填写飞书 AppID, Secret 以及 Base AppToken", "error");
-      setShowFeishuPanel(true);
-      return;
-    }
-
     setIsFeishuConnecting(true);
     showToast(direction === "pull" ? "正在从飞书多维表增量同步数据..." : "正在将案例、素材和复盘数据推送回飞书云端表...", "info");
 
     const syncPayload = {
       action: direction,
-      appId: feishuAppId,
-      appSecret: feishuAppSecret,
-      appToken: feishuAppToken,
-      ipTableId: direction === "pull" ? feishuIpTableId : "",
-      casesTableId: feishuCasesTableId,
-      materialsTableId: feishuMaterialsTableId,
-      performanceTableId: feishuPerformanceTableId,
       ipPosition: direction === "pull" ? ipPosition : null,
       cases: cases.map(stripEmbeddedCaseAsset),
       materials: materials.map(stripEmbeddedMaterialVideo),
@@ -594,19 +546,11 @@ export default function Home() {
   };
 
   const pushCasesToFeishu = async (nextCases: CompanyCase[]) => {
-    if (!feishuAppId || !feishuAppSecret || !feishuAppToken || !feishuCasesTableId) {
-      return false;
-    }
-
     const res = await fetch("/api/feishu/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: "push",
-        appId: feishuAppId,
-        appSecret: feishuAppSecret,
-        appToken: feishuAppToken,
-        casesTableId: feishuCasesTableId,
         cases: nextCases.map(stripEmbeddedCaseAsset),
       }),
     });
@@ -878,6 +822,45 @@ export default function Home() {
     return fenced ? fenced[1].trim() : trimmed;
   };
 
+  const hasClientLlmConfig = () => apiKey.trim().length > 5;
+
+  const requestChatCompletion = async (
+    messages: { role: "system" | "user" | "assistant"; content: string }[],
+    temperature: number,
+    responseFormat: { type: string } = { type: "json_object" }
+  ) => {
+    if (hasClientLlmConfig()) {
+      return fetch(`${apiBaseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: apiModel,
+          messages,
+          temperature,
+          response_format: responseFormat
+        })
+      });
+    }
+
+    return fetch("/api/llm/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        messages,
+        temperature,
+        response_format: responseFormat
+      })
+    });
+  };
+
+  const readChatCompletionContent = (data: { choices?: { message?: { content?: string } }[] }) =>
+    data.choices?.[0]?.message?.content || "";
+
   const handleParseVideoWithLLM = async () => {
     if (!matVideoFile) {
       showToast("请先选择或拖入高手参考视频！", "error");
@@ -895,7 +878,7 @@ export default function Home() {
       let transcriptText = "";
 
       // 1. 非 Gemini 端点保留 Whisper 兜底；Gemini/gmini 直接吃视频本体。
-      if (apiKey && apiKey.trim().length > 5 && !isGeminiVideoModel()) {
+      if (hasClientLlmConfig() && !isGeminiVideoModel()) {
         try {
           setParsingVideoStep("正在通过 Whisper 语音识别提取真实音轨文案...");
           const blob = dataURLtoBlob(matVideoFile);
@@ -942,7 +925,7 @@ export default function Home() {
       await delay(1000);
 
       // 2. 调用大模型
-      if (apiKey && apiKey.trim().length > 5) {
+      {
         const systemPrompt = `你是一位世界顶尖的短视频多模态结构拆解与复刻专家。
 你的任务是解析并高保真还原一个商业爆款短视频（通常为老黄这类商业大咖口播、老板IP转型、组织效率提升、AI赋能企业管理的视频）。
 当前用户已上传视频文件，文件名称为: "${uploadedVideoName || "高手口播参考视频"}"。
@@ -963,7 +946,7 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
 }`;
 
         const videoPayload = getDataUrlPayload(matVideoFile);
-        const response = isGeminiVideoModel()
+        const response = hasClientLlmConfig() && isGeminiVideoModel()
           ? await fetch(buildGeminiGenerateContentUrl(), {
             method: "POST",
             headers: {
@@ -993,28 +976,16 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
               }
             })
           })
-          : await fetch(`${apiBaseUrl}/chat/completions`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-              model: apiModel,
-              messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: `请针对已上传视频《${uploadedVideoName}》及音轨文案进行深层结构剖析。` }
-              ],
-              temperature: 0.7,
-              response_format: { type: "json_object" }
-            })
-          });
+          : await requestChatCompletion([
+            { role: "system", content: systemPrompt },
+            { role: "user", content: `请针对已上传视频《${uploadedVideoName}》及音轨文案进行深层结构剖析。` }
+          ], 0.7);
 
         if (response.ok) {
           const resData = await response.json();
-          const rawContent = isGeminiVideoModel()
+          const rawContent = hasClientLlmConfig() && isGeminiVideoModel()
             ? (resData as { candidates?: { content?: { parts?: { text?: string }[] } }[] }).candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || ""
-            : (resData as { choices?: { message?: { content?: string } }[] }).choices?.[0]?.message?.content || "";
+            : readChatCompletionContent(resData as { choices?: { message?: { content?: string } }[] });
           const content = JSON.parse(extractLLMJsonText(rawContent));
 
           setMatAuthor(content.author || "老黄·AI提效实干家");
@@ -1034,38 +1005,6 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
           const errBody = await response.text();
           throw new Error(`API 响应失败 (状态码 ${response.status}): ${errBody.slice(0, 100)}`);
         }
-      } else {
-        // 无 Key 或 Key 较短，提示并走模拟
-        showToast("检测到您未配置 API Key，将转为本地物理音视频特征推理...", "info");
-        await delay(1200);
-
-        const mockData = {
-          author: "老黄·AI提效实干家",
-          title: `拆解高手视频：《${uploadedVideoName.replace(/\.[^/.]+$/, "")}》`,
-          reason: `精准命中视频《${uploadedVideoName}》中透露出的核心痛点，反常识结论极其吸睛，精准击中管理硬伤`,
-          content: `别再自嗨了！我问你，像《${uploadedVideoName.replace(/\.[^/.]+$/, "")}》里说的那样，你给公司买了几十套AI系统，员工效率到底提上去没有？我去年亲自踩坑，亏了20多万才买来一个血泪教训：流程一乱，你买再贵的AI工具也只是在把垃圾低效放大十倍！先把你的业务SOP梳理清楚，再去套工具，这才是真正的降本增效！`,
-          visualHook: "指着镜头拍桌，伴随‘警报声’音效，大字报弹出《避坑指南》",
-          emotionCurve: "极度痛惜(0-15s) → 理性痛击(15-45s) → 诚恳同行人揭秘(45s-结尾)",
-          conflictFriction: "员工每天忙着调戏AI助手 VS 核心业务流程零沉淀",
-          editingTempo: "配合重音鼓点，每3秒快速拉近镜头，关键句上黄色加粗大字幕",
-          caseDemonstration: "展示某传统电商去年AI化前后的GMV与人工成本对比，用精准数据说话",
-          goldenFormula: "句式「业务不X，引入再先进的Y也只是加速折腾」",
-          conversionHook: "评论区二收，回复“转型”即可免费领《老板AI转型SOP避坑表》"
-        };
-
-        setMatAuthor(mockData.author);
-        setMatTitle(mockData.title);
-        setMatReason(mockData.reason);
-        setMatContent(mockData.content);
-        setMatVideoVisualHook(mockData.visualHook);
-        setMatVideoEmotionCurve(mockData.emotionCurve);
-        setMatVideoConflictFriction(mockData.conflictFriction);
-        setMatVideoEditingTempo(mockData.editingTempo);
-        setMatVideoCaseDemonstration(mockData.caseDemonstration);
-        setMatVideoGoldenFormula(mockData.goldenFormula);
-        setMatVideoConversionHook(mockData.conversionHook);
-
-        showToast("本地多模态解构引擎已为您完成高真解析！所有参数均已秒级对齐！", "success");
       }
     } catch (err: any) {
       console.error("Video parse error:", err);
@@ -1100,10 +1039,8 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
     setIsGenerating(true);
     setGenerationStepText("正在解剖分析爆款参考文案流量骨架...");
 
-    // 判断是真实 API 还是本地 fallback
-    if (apiKey && apiKey.trim().length > 5) {
-      try {
-        const systemPrompt = `你是一位顶尖的商业爆款短视频与小红书图文拆解专家。请仔细阅读用户贴入的【爆款参考原文】，解剖其底层的流量骨架与情感推进逻辑，抛弃原文具体的业务、数字和细节，提取其修辞骨架。
+    try {
+      const systemPrompt = `你是一位顶尖的商业爆款短视频与小红书图文拆解专家。请仔细阅读用户贴入的【爆款参考原文】，解剖其底层的流量骨架与情感推进逻辑，抛弃原文具体的业务、数字和细节，提取其修辞骨架。
         必须以纯 JSON 格式输出，不要带有 markdown 标记：
         {
           "hook": "开头痛点钩子是什么，怎么吸睛的",
@@ -1116,43 +1053,24 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
           "forbiddenPoints": ["禁止生硬搬运点1", "禁止搬运点2"]
         }`;
 
-        const response = await fetch(`${apiBaseUrl}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model: apiModel,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: `参考原文：\n${refContent}` }
-            ],
-            temperature: 0.3,
-            response_format: { type: "json_object" }
-          })
-        });
+      const response = await requestChatCompletion([
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `参考原文：\n${refContent}` }
+      ], 0.3);
 
-        if (response.ok) {
-          const resData = await response.json();
-          const content = JSON.parse(resData.choices[0].message.content);
-          setDeconstructionResult(content);
-          setCurrentStep(2);
-          showToast("AI 已深度剖析爆款文案的逻辑骨架！", "success");
-        } else {
-          throw new Error("API 响应失败");
-        }
-      } catch (err) {
-        fallbackDeconstruction(refContent, selectedMat);
-      } finally {
-        setIsGenerating(false);
+      if (response.ok) {
+        const resData = await response.json();
+        const content = JSON.parse(readChatCompletionContent(resData));
+        setDeconstructionResult(content);
+        setCurrentStep(2);
+        showToast("AI 已深度剖析爆款文案的逻辑骨架！", "success");
+      } else {
+        throw new Error("API 响应失败");
       }
-    } else {
-      // 降级模拟
-      setTimeout(() => {
-        fallbackDeconstruction(refContent, selectedMat);
-        setIsGenerating(false);
-      }, 1000);
+    } catch (err) {
+      fallbackDeconstruction(refContent, selectedMat);
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -1193,12 +1111,10 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
       ? "私信我‘自查’，送你一份我亲自整理的《老板AI转型排雷自查表》，直接对照避雷。"
       : "私信我‘诊断’，约一次我的团队《中小企业AI经营一对一诊断服务》，帮你肉眼揪出管理内耗。";
 
-    // 判断是真实 API 还是模拟 Fallback
-    if (apiKey && apiKey.trim().length > 5) {
-      try {
-        // Step 1: 调用 Fusion 接口生成文案
-        setGenerationStepText("【第二步】：正在融合老黄 80人公司实操案例，生成抖音/小红书/视频号文案...");
-        const fusionSystemPrompt = `你是顶尖的“老黄AI经营IP原创商业文案引擎”。你的核心法则不是洗稿，而是将爆款骨架，与老黄公司的真实数据及IP特质进行深度融合重塑。
+    try {
+      // Step 1: 调用 Fusion 接口生成文案
+      setGenerationStepText("【第二步】：正在融合老黄 80人公司实操案例，生成抖音/小红书/视频号文案...");
+      const fusionSystemPrompt = `你是顶尖的“老黄AI经营IP原创商业文案引擎”。你的核心法则不是洗稿，而是将爆款骨架，与老黄公司的真实数据及IP特质进行深度融合重塑。
 
         一、IP定位与语气约束：
         80人电商、直播、跨境公司老板亲自下场推动AI转型。语气必须直白、辛辣、实战、直指痛点，是实干家踩坑者的口吻，绝对禁止炫富、空泛说教与网络伪成功学。
@@ -1253,30 +1169,18 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
           "alternateTitles": ["备选爆款标题1", "备选标题2", "备选标题3", "备选标题4", "备选标题5"]
         }`;
 
-        const fusionResponse = await fetch(`${apiBaseUrl}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model: apiModel,
-            messages: [
-              { role: "system", content: fusionSystemPrompt },
-              { role: "user", content: "请根据上述数据和爆款骨架，装配生成三端高分文案。" }
-            ],
-            temperature: 0.7,
-            response_format: { type: "json_object" }
-          })
-        });
+      const fusionResponse = await requestChatCompletion([
+        { role: "system", content: fusionSystemPrompt },
+        { role: "user", content: "请根据上述数据和爆款骨架，装配生成三端高分文案。" }
+      ], 0.7);
 
-        if (!fusionResponse.ok) throw new Error("文案融合生成失败");
-        const fusionData = await fusionResponse.json();
-        const generatedJSON = normalizeGeneratedOutput(JSON.parse(fusionData.choices[0].message.content), ctaText);
+      if (!fusionResponse.ok) throw new Error("文案融合生成失败");
+      const fusionData = await fusionResponse.json();
+      const generatedJSON = normalizeGeneratedOutput(JSON.parse(readChatCompletionContent(fusionData)), ctaText);
 
-        // Step 2: 审计打分接口
-        setGenerationStepText("【第三步】：文案装载完毕，正在进入自检合规防跑偏审查，打分中...");
-        const auditSystemPrompt = `你是一位挑剔的商业 IP 运营审计总监。你需要对照 IP 紧箍咒规则，对刚刚生成的文案进行极其苛刻的自检评估打分。
+      // Step 2: 审计打分接口
+      setGenerationStepText("【第三步】：文案装载完毕，正在进入自检合规防跑偏审查，打分中...");
+      const auditSystemPrompt = `你是一位挑剔的商业 IP 运营审计总监。你需要对照 IP 紧箍咒规则，对刚刚生成的文案进行极其苛刻的自检评估打分。
         六大审计评估指标（总分100分，低于80分将拒绝发布并提供润色重塑建议）：
         1. IP 定位相关度 (IP Relevance, 满分 20分)：是否在聊老板转型、看板SOP，是否偏向纯工具教程或大空宏观。
         2. 真实案例融入感 (Case Authenticity, 满分 20分)：是否扎扎实实灌装了真实的业务问题和数据，是否虚浮。
@@ -1299,66 +1203,47 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
           "refinementSuggestions": "具体的不足点分析及口播剪辑包装建议"
         }`;
 
-        const auditResponse = await fetch(`${apiBaseUrl}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model: apiModel,
-            messages: [
-              { role: "system", content: auditSystemPrompt },
-              { role: "user", content: `待审计的生成文案内容：\n${JSON.stringify(generatedJSON)}` }
-            ],
-            temperature: 0.2,
-            response_format: { type: "json_object" }
-          })
-        });
+      const auditResponse = await requestChatCompletion([
+        { role: "system", content: auditSystemPrompt },
+        { role: "user", content: `待审计的生成文案内容：\n${JSON.stringify(generatedJSON)}` }
+      ], 0.2);
 
-        if (!auditResponse.ok) throw new Error("文案审计失败");
-        const auditData = await auditResponse.json();
-        const auditJSON = JSON.parse(auditData.choices[0].message.content);
+      if (!auditResponse.ok) throw new Error("文案审计失败");
+      const auditData = await auditResponse.json();
+      const auditJSON = JSON.parse(readChatCompletionContent(auditData));
 
-        // 合并结果
-        const finalOutput: AgentOutput = {
-          ...generatedJSON,
-          coreInsight: generatedJSON.coreInsight || selectedCase.insight,
-          alternateTitles: generatedJSON.alternateTitles || selectedCase.suggestedTitles,
-          structureBreakdown: deconstructionResult,
-          learnablePoints: deconstructionResult.learnablePoints,
-          forbiddenPoints: deconstructionResult.forbiddenPoints,
-          scoreCard: auditJSON.scoreCard,
-          refinementSuggestions: auditJSON.refinementSuggestions
-        };
+      // 合并结果
+      const finalOutput: AgentOutput = {
+        ...generatedJSON,
+        coreInsight: generatedJSON.coreInsight || selectedCase.insight,
+        alternateTitles: generatedJSON.alternateTitles || selectedCase.suggestedTitles,
+        structureBreakdown: deconstructionResult,
+        learnablePoints: deconstructionResult.learnablePoints,
+        forbiddenPoints: deconstructionResult.forbiddenPoints,
+        scoreCard: auditJSON.scoreCard,
+        refinementSuggestions: auditJSON.refinementSuggestions
+      };
 
-        setAgentResult(finalOutput);
-        setEditableScripts({
-          dyScript: finalOutput.dyScript,
-          xhsScript: {
-            title: finalOutput.xhsScript.title,
-            coverTitle: finalOutput.xhsScript.coverTitle,
-            content: finalOutput.xhsScript.content,
-            cta: finalOutput.xhsScript.cta
-          },
-          sphScript: finalOutput.sphScript
-        });
+      setAgentResult(finalOutput);
+      setEditableScripts({
+        dyScript: finalOutput.dyScript,
+        xhsScript: {
+          title: finalOutput.xhsScript.title,
+          coverTitle: finalOutput.xhsScript.coverTitle,
+          content: finalOutput.xhsScript.content,
+          cta: finalOutput.xhsScript.cta
+        },
+        sphScript: finalOutput.sphScript
+      });
 
-        setCurrentStep(4);
-        showToast("🎉 三步串联 AI 推理连已全部打通！原创高分稿件已产出。", "success");
+      setCurrentStep(4);
+      showToast("🎉 三步串联 AI 推理连已全部打通！原创高分稿件已产出。", "success");
 
-      } catch (err: any) {
-        showToast(`AI Chained 运行出错: ${err.message}，已自动激活本地装配引擎。`, "info");
-        fallbackGeneration(selectedCase, ctaText);
-      } finally {
-        setIsGenerating(false);
-      }
-    } else {
-      // 降级模拟
-      setTimeout(() => {
-        fallbackGeneration(selectedCase, ctaText);
-        setIsGenerating(false);
-      }, 1500);
+    } catch (err: any) {
+      showToast(`AI Chained 运行出错: ${err.message}，已自动激活本地装配引擎。`, "info");
+      fallbackGeneration(selectedCase, ctaText);
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -1500,35 +1385,27 @@ ${ctaText}`;
     setPerformance(updated);
     localStorage.setItem("xz_performance_records", JSON.stringify(updated));
 
-    if (feishuAppId && feishuAppSecret && feishuAppToken && feishuPerformanceTableId) {
-      setIsFeishuConnecting(true);
-      showToast("正在将已定稿的文案归档，同步至飞书内容复盘库...", "info");
-      try {
-        const res = await fetch("/api/feishu/sync", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "push",
-            appId: feishuAppId,
-            appSecret: feishuAppSecret,
-            appToken: feishuAppToken,
-            performanceTableId: feishuPerformanceTableId,
-            performance: [newRecord] // 增量推送单条
-          }),
-        });
-        const result = await res.json();
-        if (result.success) {
-          showToast("🎉 文案定稿归档成功！飞书内容复盘库已实时同步更新！", "success");
-        } else {
-          showToast(`本地归档成功，飞书云端同步失败: ${result.error}`, "error");
-        }
-      } catch (e: any) {
-        showToast(`云端同步失败: ${e.message}`, "error");
-      } finally {
-        setIsFeishuConnecting(false);
+    setIsFeishuConnecting(true);
+    showToast("正在将已定稿的文案归档，同步至飞书内容复盘库...", "info");
+    try {
+      const res = await fetch("/api/feishu/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "push",
+          performance: [newRecord] // 增量推送单条
+        }),
+      });
+      const result = await res.json();
+      if (result.success) {
+        showToast("🎉 文案定稿归档成功！飞书内容复盘库已实时同步更新！", "success");
+      } else {
+        showToast(`本地归档成功，飞书云端同步失败: ${result.error}`, "error");
       }
-    } else {
-      showToast("🎉 稿件已定稿并录入本地‘内容表现复盘库’，等待每日数据回填！", "success");
+    } catch (e: any) {
+      showToast(`云端同步失败: ${e.message}`, "error");
+    } finally {
+      setIsFeishuConnecting(false);
     }
 
     // 重置进度返回第一步，准备写下一篇
@@ -1712,76 +1589,17 @@ ${ctaText}`;
               </div>
             </div>
 
-            <form onSubmit={handleSaveFeishuConfig} className="grid grid-cols-1 md:grid-cols-4 gap-4 text-[10px] font-bold text-slate-500">
+            <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div>
-                <label className="block mb-1">飞书应用 App ID</label>
-                <input
-                  type="text" placeholder="cli_xxxxxxxxxxx"
-                  value={feishuAppId} onChange={(e) => setFeishuAppId(e.target.value)}
-                  className="block w-full px-3 py-2 bg-white/70 border border-slate-200 rounded-lg text-xs"
-                />
+                <p className="text-[10px] font-black text-emerald-700 uppercase">连接配置已由服务端托管</p>
+                <p className="text-[10px] text-emerald-700/70 font-semibold mt-1">
+                  页面不再采集或保存飞书密钥与数据表映射，点击同步按钮即可使用程序内固定配置。
+                </p>
               </div>
-              <div>
-                <label className="block mb-1">飞书 App Secret (密钥保密)</label>
-                <input
-                  type="password" placeholder="xxxxxxxxxxxx"
-                  value={feishuAppSecret} onChange={(e) => setFeishuAppSecret(e.target.value)}
-                  className="block w-full px-3 py-2 bg-white/70 border border-slate-200 rounded-lg text-xs"
-                />
-              </div>
-              <div>
-                <label className="block mb-1">多维表 App Token (Base URL内)</label>
-                <input
-                  type="text" placeholder="bascnxxxxxxxxxxxx"
-                  value={feishuAppToken} onChange={(e) => setFeishuAppToken(e.target.value)}
-                  className="block w-full px-3 py-2 bg-white/70 border border-slate-200 rounded-lg text-xs"
-                />
-              </div>
-              <div className="flex items-end">
-                <button
-                  type="submit"
-                  className="w-full py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-900 transition-all font-black"
-                >
-                  保存飞书连接器配置
-                </button>
-              </div>
-
-              {/* 子表ID映射 */}
-              <div className="col-span-1 md:col-span-4 grid grid-cols-2 md:grid-cols-4 gap-4 border-t border-slate-200/60 pt-3 mt-1.5">
-                <div>
-                  <label className="block mb-1">1. IP 定位子表ID (Table ID)</label>
-                  <input
-                    type="text" placeholder="tblxxxxxx (选填)"
-                    value={feishuIpTableId} onChange={(e) => setFeishuIpTableId(e.target.value)}
-                    className="block w-full px-2.5 py-1.5 bg-white/50 border border-slate-200 rounded-md text-[10px]"
-                  />
-                </div>
-                <div>
-                  <label className="block mb-1">2. 公司案例库子表ID</label>
-                  <input
-                    type="text" placeholder="tblxxxxxx (选填)"
-                    value={feishuCasesTableId} onChange={(e) => setFeishuCasesTableId(e.target.value)}
-                    className="block w-full px-2.5 py-1.5 bg-white/50 border border-slate-200 rounded-md text-[10px]"
-                  />
-                </div>
-                <div>
-                  <label className="block mb-1">3. 高手素材库子表ID</label>
-                  <input
-                    type="text" placeholder="tblxxxxxx (选填)"
-                    value={feishuMaterialsTableId} onChange={(e) => setFeishuMaterialsTableId(e.target.value)}
-                    className="block w-full px-2.5 py-1.5 bg-white/50 border border-slate-200 rounded-md text-[10px]"
-                  />
-                </div>
-                <div>
-                  <label className="block mb-1">4. 内容表现复盘子表ID</label>
-                  <input
-                    type="text" placeholder="tblxxxxxx (选填)"
-                    value={feishuPerformanceTableId} onChange={(e) => setFeishuPerformanceTableId(e.target.value)}
-                    className="block w-full px-2.5 py-1.5 bg-white/50 border border-slate-200 rounded-md text-[10px]"
-                  />
-                </div>
-              </div>
-            </form>
+              <span className="shrink-0 px-3 py-1.5 rounded-full bg-white/80 text-[10px] font-black text-emerald-700 border border-emerald-100">
+                固定配置模式
+              </span>
+            </div>
           </div>
         </section>
       )}
@@ -2522,8 +2340,8 @@ ${ctaText}`;
                           <span className="text-slate-800 font-extrabold">{targetPlatforms.join("、")}</span>
                         </div>
                         <div className="flex justify-between items-center text-[10px]">
-                          <span className="text-slate-400 uppercase">飞书归档表 TableID</span>
-                          <span className="text-slate-500 font-mono">{feishuPerformanceTableId ? feishuPerformanceTableId : "未设置 (仅作本地归档)"}</span>
+                          <span className="text-slate-400 uppercase">飞书归档配置</span>
+                          <span className="text-slate-500 font-mono">服务端固定配置</span>
                         </div>
                       </div>
                     </div>
