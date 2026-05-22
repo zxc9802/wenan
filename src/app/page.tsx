@@ -1414,6 +1414,7 @@ JSON 结构：
       }
 
       showToast("一键生成5篇文章完成，已按 Gemini 2篇、DeepSeek 3篇分工输出。", "success");
+      setCurrentStep(4);
     } finally {
       setIsGenerating(false);
       setGenerationStepText("");
@@ -2202,7 +2203,7 @@ ${ctaText}`;
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
                       </svg>
-                      开启 AI 灵感装配重塑大融接
+                      生成三端定稿（抖音 / 小红书 / 视频号）
                     </>
                   )}
                 </button>
@@ -2216,57 +2217,22 @@ ${ctaText}`;
                   {isGenerating ? generationStepText || "正在生成多篇文章..." : "一键生成5篇文章（Gemini 2篇 + DeepSeek 3篇）"}
                 </button>
 
-                {batchArticleResults.length > 0 && (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-black text-slate-900">批量文章结果</h4>
-                      <span className="text-[10px] font-bold text-slate-400">{batchArticleResults.length}/5</span>
-                    </div>
-                    {batchArticleResults.map((article, index) => (
-                      <div key={article.id} className="bg-white/70 border border-slate-200 rounded-2xl p-4 space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-[10px] font-black text-indigo-600 uppercase">
-                              第 {index + 1} 篇 · {article.platform} · {article.styleName}
-                            </div>
-                            <h5 className="text-sm font-black text-slate-900 mt-1">{article.title}</h5>
-                          </div>
-                          <span className="shrink-0 px-2 py-1 rounded-lg bg-slate-100 text-[10px] font-black text-slate-500">
-                            {article.fallbackUsed ? `${article.requestedProvider}→${article.provider}` : article.provider}
-                          </span>
-                        </div>
-                        <textarea
-                          value={article.content}
-                          onChange={(e) => setBatchArticleResults(batchArticleResults.map(item =>
-                            item.id === article.id ? { ...item, content: e.target.value } : item
-                          ))}
-                          className="w-full min-h-48 bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs leading-relaxed text-slate-700 focus:outline-none focus:border-indigo-500"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleCopy(article.content, `第${index + 1}篇文章`)}
-                          className="px-3 py-2 bg-slate-900 text-white rounded-xl font-bold text-[10px] cursor-pointer"
-                        >
-                          复制这篇
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             )}
 
             {/* Step 4: 并排工坊与人工微调 (Parallel Studio Panel) */}
-            {currentStep === 4 && editableScripts && (
+            {currentStep === 4 && (editableScripts || batchArticleResults.length > 0) && (
               <div className="space-y-6 animate-pop-out">
                 <div className="glass-panel rounded-3xl p-5 border border-white/30 flex justify-between items-center">
                   <div>
                     <h3 className="text-xs font-black text-slate-900 flex items-center gap-1.5 uppercase">
                       <span className="w-1 h-3.5 bg-indigo-600 rounded-full" />
-                      Step 4: 独立定稿并排工作台 (三栏并排比对 & 自由编辑)
+                      Step 4: 独立定稿并排工作台
                     </h3>
                     <p className="text-[10px] text-slate-400 mt-1 font-semibold">
-                      生成的版本已并在下方。您可以点击文本框直接对各渠道正文内容进行最后的微调修改，完成最终定稿。
+                      {batchArticleResults.length > 0
+                        ? "5篇不同风格文章已生成在下方，可逐篇编辑和复制。"
+                        : "生成的版本已并在下方。您可以点击文本框直接对各渠道正文内容进行最后的微调修改，完成最终定稿。"}
                     </p>
                   </div>
                   <div className="flex gap-2">
@@ -2285,6 +2251,60 @@ ${ctaText}`;
                   </div>
                 </div>
 
+                {batchArticleResults.length > 0 && (
+                  <div className="space-y-4">
+                    <div className="glass-panel rounded-3xl p-5 border border-white/30 flex items-center justify-between">
+                      <div>
+                        <h4 className="text-xs font-black text-slate-900">一键生成5篇文章结果</h4>
+                        <p className="text-[10px] text-slate-400 mt-1 font-semibold">
+                          默认分工：Gemini 2篇，DeepSeek 3篇；若某个模型报错，服务端会自动换另一个模型接管。
+                        </p>
+                      </div>
+                      <span className="text-xs font-black text-indigo-600">{batchArticleResults.length}/5</span>
+                    </div>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                      {batchArticleResults.map((article, index) => (
+                        <div key={article.id} className="glass-panel rounded-3xl p-5 border border-white/20 shadow-lg space-y-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="text-[10px] font-black text-indigo-600 uppercase">
+                                第 {index + 1} 篇 · {article.platform} · {article.styleName}
+                              </div>
+                              <input
+                                type="text"
+                                value={article.title}
+                                onChange={(e) => setBatchArticleResults(batchArticleResults.map(item =>
+                                  item.id === article.id ? { ...item, title: e.target.value } : item
+                                ))}
+                                className="mt-2 w-full bg-white/50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm font-black text-slate-900 focus:outline-none focus:border-indigo-500"
+                              />
+                            </div>
+                            <span className="shrink-0 px-2 py-1 rounded-lg bg-slate-100 text-[10px] font-black text-slate-500">
+                              {article.fallbackUsed ? `${article.requestedProvider}→${article.provider}` : article.provider}
+                            </span>
+                          </div>
+                          <textarea
+                            value={article.content}
+                            onChange={(e) => setBatchArticleResults(batchArticleResults.map(item =>
+                              item.id === article.id ? { ...item, content: e.target.value } : item
+                            ))}
+                            className="w-full h-80 bg-white/50 border border-slate-200 rounded-xl p-3 text-xs font-semibold leading-relaxed text-slate-700 focus:outline-none focus:border-indigo-500 resize-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(`${article.title}\n\n${article.content}`, `第${index + 1}篇文章`)}
+                            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] rounded-xl transition-all cursor-pointer"
+                          >
+                            复制这篇文章
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {editableScripts && (
+                  <>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   {/* 抖音口播列 */}
                   {targetPlatforms.includes("抖音") && (
@@ -2470,6 +2490,8 @@ ${ctaText}`;
                     ))}
                   </div>
                 </div>
+                  </>
+                )}
               </div>
             )}
 
