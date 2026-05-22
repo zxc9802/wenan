@@ -314,6 +314,50 @@ const normalizeSessionUserId = (payload: SessionResponsePayload | null) => {
   return typeof userId === "string" && userId.trim() ? userId.trim() : LOCAL_DEV_USER_ID;
 };
 
+const getPlatformWritingGuide = (platform: string) => {
+  if (platform === "小红书") {
+    return `平台专属写作规范：小红书图文笔记
+- 标题必须像小红书笔记：痛点/反差/结果/收藏理由至少占两项，避免写成视频口播标题。
+- 封面标题要能拆成2-3行短句，第一眼看出“老板AI转型/经营避坑/真实案例”的价值。
+- 正文用收藏型结构，开头可以提示“建议先收藏”，但必须自然，不能营销腔。
+- 用短段落、小标题、1. 2. 3. 或 ✅/⚠️ 做信息分层，适度 emoji，不要满屏符号。
+- 避免口播腔，不要写“今天这条视频”“我跟你说”“镜头前”等短视频表达。
+- 内容要像真实老板的干货笔记：先讲踩坑或误区，再拆真实案例动作，最后给老板可执行判断。`;
+  }
+
+  if (platform === "视频号") {
+    return `平台专属写作规范：视频号稳重口播
+- 语气沉稳、真诚、适合老板圈和传统企业主阅读。
+- 正文可以有口播节奏，但少用夸张词和情绪化符号。
+- 用复盘、判断、边界感建立可信度。`;
+  }
+
+  return `平台专属写作规范：抖音短视频口播
+- 开头要快，直接抛出老板经营痛点或反常识判断。
+- 句子短，冲突强，适合口播，不要写成图文笔记。
+- 用真实案例承接观点，结尾自然导向私信 CTA。`;
+};
+
+const getBatchStyleVariants = (platform: string) => {
+  if (platform === "小红书") {
+    return [
+      { provider: "gemini" as const, styleName: "收藏型避坑清单", stylePrompt: "写成小红书收藏型避坑清单，标题有收藏理由，正文短段落分点，适合老板截图转发。" },
+      { provider: "gemini" as const, styleName: "老板真实案例复盘", stylePrompt: "写成真实老板案例复盘笔记，先讲误区，再拆动作和结果，语气像亲历后的冷静提醒。" },
+      { provider: "deepseek" as const, styleName: "AI转型误区笔记", stylePrompt: "写成小红书误区纠偏笔记，用⚠️和✅分层，强调哪些事别急着做、先看清什么。" },
+      { provider: "deepseek" as const, styleName: "经营提效方法论", stylePrompt: "写成可收藏的方法论笔记，3-5个小标题，每段都给老板一个能带走的判断。" },
+      { provider: "deepseek" as const, styleName: "私域咨询转化笔记", stylePrompt: "写成轻转化小红书笔记，先给干货价值，再自然引导私信，避免硬广和口播腔。" },
+    ];
+  }
+
+  return [
+    { provider: "gemini" as const, styleName: "犀利打脸口播", stylePrompt: "开头像老板当场拍桌复盘，语气尖锐、反常识、节奏快，但事实必须克制。" },
+    { provider: "gemini" as const, styleName: "冷静经营复盘", stylePrompt: "语气沉稳、有经营复盘感，像老板在会议后讲透一个判断，少用夸张词。" },
+    { provider: "deepseek" as const, styleName: "清单干货拆解", stylePrompt: "用收藏型结构，短句、分点、强干货感，适合老板转发给团队。" },
+    { provider: "deepseek" as const, styleName: "踩坑自白故事", stylePrompt: "用第一人称讲踩坑过程，先承认自己也走过弯路，再给出真实案例判断。" },
+    { provider: "deepseek" as const, styleName: "咨询转化强钩子", stylePrompt: "开头更像咨询诊断现场，强调问题识别和行动边界，结尾自然引导私信。" },
+  ];
+};
+
 const persistCases = (storageScope: string, nextCases: CompanyCase[]) => {
   localStorage.setItem(
     getScopedStorageKey(storageScope, STORAGE_SCOPE_KEYS.cases),
@@ -1207,6 +1251,7 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
         3. 每个渠道正文结尾必须逐字嵌入以下指定私域转化句式 (CTA)：${ctaText}。
         4. 自定义语调微调参数：${toneAdjustment || "直白痛点、老板视角"}。
         5. 关键要求：生成的正文中【绝对不能】出现 [Hook]、[Conflict]、[CaseUsage]、[Emotion]、[GoldenSentence] 等任何方括号结构标签。文案段落之间应自然连贯过渡，直接输出干净、适合直接复制发布的最终成品文案。
+        6. 小红书专属要求：如果生成 xhsScript，必须严格按“小红书图文笔记”写，不要把抖音口播改成图文。标题要有痛点、反差、结果或收藏理由；封面标题要适合排成2-3行短句；正文要有短段落、小标题、收藏型结构、适度 emoji，可使用 ✅/⚠️/数字分点；避免口播腔，不能出现“今天这条视频”“我跟你说”“镜头前”等短视频表达。
 
         必须以纯 JSON 格式输出，不要带有 markdown 格式标记：
         {
@@ -1217,9 +1262,9 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
             "cta": "抖音版转化句式"
           },
           "xhsScript": {
-            "title": "小红书爆款图文标题",
-            "coverTitle": "封面大字报标题推荐 (排版成2-3行大字)",
-            "content": "小红书图文文案正文，多带生动emoji，列点呈现，具有强烈干货感（无任何 [Hook]、[Conflict] 等结构标签）",
+            "title": "小红书图文笔记标题，像真实小红书标题：痛点/反差/结果/收藏理由至少占两项",
+            "coverTitle": "封面标题推荐，适合排版成2-3行短句大字",
+            "content": "小红书图文笔记正文，短段落、小标题、收藏型结构、适度emoji，使用 ✅/⚠️/数字分点呈现干货，避免口播腔（无任何 [Hook]、[Conflict] 等结构标签）",
             "cta": "小红书版转化句式"
           },
           "sphScript": {
@@ -1323,15 +1368,8 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
       ? "私信我‘自查’，送你一份我亲自整理的《老板AI转型排雷自查表》，直接对照避雷。"
       : "私信我‘诊断’，约一次我的团队《中小企业AI经营一对一诊断服务》，帮你肉眼揪出管理内耗。";
 
-    const styleVariants = [
-      { provider: "gemini" as const, styleName: "犀利打脸口播", stylePrompt: "开头像老板当场拍桌复盘，语气尖锐、反常识、节奏快，但事实必须克制。" },
-      { provider: "gemini" as const, styleName: "冷静经营复盘", stylePrompt: "语气沉稳、有经营复盘感，像老板在会议后讲透一个判断，少用夸张词。" },
-      { provider: "deepseek" as const, styleName: "清单干货拆解", stylePrompt: "用收藏型结构，短句、分点、强干货感，适合老板转发给团队。" },
-      { provider: "deepseek" as const, styleName: "踩坑自白故事", stylePrompt: "用第一人称讲踩坑过程，先承认自己也走过弯路，再给出真实案例判断。" },
-      { provider: "deepseek" as const, styleName: "咨询转化强钩子", stylePrompt: "开头更像咨询诊断现场，强调问题识别和行动边界，结尾自然引导私信。" },
-    ];
     const batchPlan = targetPlatforms.flatMap((platform) =>
-      styleVariants.map((variant, variantIndex) => ({
+      getBatchStyleVariants(platform).map((variant, variantIndex) => ({
         ...variant,
         platform,
         articleNumber: variantIndex + 1,
@@ -1374,6 +1412,7 @@ IP定位：${ipPosition.ipDefinition}
 本平台文章编号：第 ${item.articleNumber} 篇，共 5 篇
 本篇风格：${item.styleName}
 风格指令：${item.stylePrompt}
+${getPlatformWritingGuide(item.platform)}
 
 JSON 结构：
 {
