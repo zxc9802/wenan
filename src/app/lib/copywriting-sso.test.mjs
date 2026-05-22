@@ -24,7 +24,7 @@ test("copywriting app declares a signed main-site SSO session", async () => {
 });
 
 test("copywriting app proxy exchanges SSO tickets and redirects failures to the main site", async () => {
-  const source = await read("src/proxy.ts");
+  const source = `${await read("proxy.ts")}\n${await read("src/proxy.ts")}`;
 
   assert.match(source, /export async function proxy/);
   assert.match(source, /exchangeMainAppSsoTicket/);

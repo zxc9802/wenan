@@ -123,6 +123,20 @@ interface DeconstructionResult {
   forbiddenPoints: string[];
 }
 
+type LlmProvider = "gemini" | "deepseek";
+
+interface BatchArticleResult {
+  id: string;
+  title: string;
+  platform: string;
+  content: string;
+  provider: LlmProvider;
+  requestedProvider: LlmProvider;
+  styleName: string;
+  fallbackUsed: boolean;
+  cta: string;
+}
+
 // ==========================================
 // 2. 种子预设数据 (Seeded Databases)
 // ==========================================
@@ -368,6 +382,7 @@ export default function Home() {
   const [uploadedVideoName, setUploadedVideoName] = useState("");
   const [deconstructionResult, setDeconstructionResult] = useState<DeconstructionResult | null>(null);
   const [agentResult, setAgentResult] = useState<AgentOutput | null>(null);
+  const [batchArticleResults, setBatchArticleResults] = useState<BatchArticleResult[]>([]);
 
   // 并排工坊与修改状态
   const [editableScripts, setEditableScripts] = useState<{
@@ -868,7 +883,8 @@ export default function Home() {
   const requestChatCompletion = async (
     messages: { role: "system" | "user" | "assistant"; content: string }[],
     temperature: number,
-    responseFormat: { type: string } = { type: "json_object" }
+    responseFormat: { type: string } = { type: "json_object" },
+    options: { preferredProvider?: LlmProvider; fallbackProvider?: LlmProvider } = {}
   ) => {
     if (hasClientLlmConfig()) {
       return fetch(`${apiBaseUrl}/chat/completions`, {
@@ -894,13 +910,18 @@ export default function Home() {
       body: JSON.stringify({
         messages,
         temperature,
-        response_format: responseFormat
+        response_format: responseFormat,
+        preferredProvider: options.preferredProvider,
+        fallbackProvider: options.fallbackProvider
       })
     });
   };
 
   const readChatCompletionContent = (data: { choices?: { message?: { content?: string } }[] }) =>
     data.choices?.[0]?.message?.content || "";
+
+  const readChatCompletionProvider = (data: { _provider?: LlmProvider }, fallback: LlmProvider) =>
+    data._provider || fallback;
 
   const handleParseVideoWithLLM = async () => {
     if (!matVideoFile) {
@@ -1209,7 +1230,7 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
       const fusionResponse = await requestChatCompletion([
         { role: "system", content: fusionSystemPrompt },
         { role: "user", content: "请根据上述数据和爆款骨架，装配生成三端高分文案。" }
-      ], 0.7);
+      ], 0.7, { type: "json_object" }, { preferredProvider: "gemini", fallbackProvider: "deepseek" });
 
       if (!fusionResponse.ok) throw new Error("文案融合生成失败");
       const fusionData = await fusionResponse.json();
@@ -1243,7 +1264,7 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
       const auditResponse = await requestChatCompletion([
         { role: "system", content: auditSystemPrompt },
         { role: "user", content: `待审计的生成文案内容：\n${JSON.stringify(generatedJSON)}` }
-      ], 0.2);
+      ], 0.2, { type: "json_object" }, { preferredProvider: "deepseek", fallbackProvider: "gemini" });
 
       if (!auditResponse.ok) throw new Error("文案审计失败");
       const auditData = await auditResponse.json();
@@ -1281,6 +1302,121 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
       fallbackGeneration(selectedCase, ctaText);
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const executeBatchCopywritingGeneration = async () => {
+    const selectedCase = cases.find(c => c.id === selectedCaseId);
+    if (!selectedCase) {
+      showToast("请先选择一个真实的公司实战案例作为注入血肉！", "error");
+      return;
+    }
+    if (!deconstructionResult) {
+      showToast("请先完成爆款结构拆解，再一键生成多篇文章。", "error");
+      return;
+    }
+
+    const ctaText = ctaType === "自查"
+      ? "私信我‘自查’，送你一份我亲自整理的《老板AI转型排雷自查表》，直接对照避雷。"
+      : "私信我‘诊断’，约一次我的团队《中小企业AI经营一对一诊断服务》，帮你肉眼揪出管理内耗。";
+
+    const batchPlan: { provider: LlmProvider; styleName: string; stylePrompt: string; platform: string }[] = [
+      { provider: "gemini", styleName: "犀利打脸口播", platform: "抖音", stylePrompt: "开头像老板当场拍桌复盘，语气尖锐、反常识、节奏快，但事实必须克制。" },
+      { provider: "gemini", styleName: "冷静经营复盘", platform: "视频号", stylePrompt: "语气沉稳、有经营复盘感，像老板在会议后讲透一个判断，少用夸张词。" },
+      { provider: "deepseek", styleName: "小红书清单干货", platform: "小红书", stylePrompt: "用收藏型图文结构，短句、分点、强干货感，适合老板转发给团队。" },
+      { provider: "deepseek", styleName: "踩坑自白故事", platform: "抖音", stylePrompt: "用第一人称讲踩坑过程，先承认自己也走过弯路，再给出真实案例判断。" },
+      { provider: "deepseek", styleName: "咨询转化强钩子", platform: "视频号", stylePrompt: "开头更像咨询诊断现场，强调问题识别和行动边界，结尾自然引导私信。" },
+    ];
+
+    setIsGenerating(true);
+    setBatchArticleResults([]);
+
+    try {
+      const nextResults: BatchArticleResult[] = [];
+      for (const [index, item] of batchPlan.entries()) {
+        setGenerationStepText(`正在生成第 ${index + 1}/5 篇：${item.styleName}（优先 ${item.provider}，失败自动换另一个模型）...`);
+
+        const systemPrompt = `你是老黄AI经营IP的原创商业文章引擎。请根据真实案例和爆款骨架生成一篇可直接发布的完整文章。
+
+硬性规则：
+1. 只能使用案例中明示的信息，不能补造未填写的工具、系统、平台、数据或客户细节。
+2. 每篇文章必须和其他版本风格明显不同。
+3. 正文不能出现 [Hook]、[Conflict]、[CaseUsage] 等结构标签。
+4. 正文结尾必须逐字包含 CTA：${ctaText}
+5. 返回严格 JSON，不要 markdown。
+
+IP定位：${ipPosition.ipDefinition}
+人设：${ipPosition.corePersona}
+红线：${ipPosition.bannedTopics}
+爆款结构骨架：${JSON.stringify(deconstructionResult)}
+案例名称：${selectedCase.name}
+案例痛点：${selectedCase.originalProblem}
+采取动作：${selectedCase.action}
+工具边界：${buildToolBoundaryText(selectedCase)}
+结果：${selectedCase.result}
+启发：${selectedCase.insight}
+
+本篇目标平台：${item.platform}
+本篇风格：${item.styleName}
+风格指令：${item.stylePrompt}
+
+JSON 结构：
+{
+  "title": "文章标题",
+  "platform": "${item.platform}",
+  "content": "完整正文",
+  "cta": "${ctaText}"
+}`;
+
+        try {
+          const response = await requestChatCompletion([
+            { role: "system", content: systemPrompt },
+            { role: "user", content: `生成第 ${index + 1} 篇文章，风格必须是：${item.styleName}` }
+          ], 0.78, { type: "json_object" }, {
+            preferredProvider: item.provider,
+            fallbackProvider: item.provider === "gemini" ? "deepseek" : "gemini"
+          });
+
+          if (!response.ok) {
+            throw new Error(`第 ${index + 1} 篇文章生成失败`);
+          }
+
+          const data = await response.json();
+          const parsed = JSON.parse(extractLLMJsonText(readChatCompletionContent(data)));
+          const usedProvider = readChatCompletionProvider(data, item.provider);
+          nextResults.push({
+            id: `batch-${Date.now()}-${index}`,
+            title: parsed.title || `${selectedCase.name}｜${item.styleName}`,
+            platform: parsed.platform || item.platform,
+            content: appendRequiredCta(parsed.content || "", ctaText),
+            cta: ctaText,
+            provider: usedProvider,
+            requestedProvider: item.provider,
+            styleName: item.styleName,
+            fallbackUsed: usedProvider !== item.provider,
+          });
+        } catch (error) {
+          nextResults.push({
+            id: `batch-local-${Date.now()}-${index}`,
+            title: `${selectedCase.name}｜${item.styleName}`,
+            platform: item.platform,
+            content: appendRequiredCta(`这篇先用本地装配兜底：${selectedCase.name}最早的问题是，${selectedCase.originalProblem}\n\n我们实际做的动作是：${selectedCase.action}\n\n最后结果很直接：${selectedCase.result}\n\n我从这里得到的判断是：${selectedCase.insight}\n\n这不是换一个工具名就能解决的事，而是老板要先把问题、动作和结果讲清楚。`, ctaText),
+            cta: ctaText,
+            provider: item.provider,
+            requestedProvider: item.provider,
+            styleName: `${item.styleName}（本地兜底）`,
+            fallbackUsed: true,
+          });
+          console.warn("批量文章生成失败，已本地兜底", error);
+        }
+
+        setBatchArticleResults([...nextResults]);
+      }
+
+      showToast("一键生成5篇文章完成，已按 Gemini 2篇、DeepSeek 3篇分工输出。", "success");
+    } finally {
+      setIsGenerating(false);
+      setGenerationStepText("");
     }
   };
 
@@ -2070,6 +2206,53 @@ ${ctaText}`;
                     </>
                   )}
                 </button>
+
+                <button
+                  type="button"
+                  disabled={isGenerating}
+                  onClick={executeBatchCopywritingGeneration}
+                  className="w-full py-4 rounded-2xl text-indigo-700 font-extrabold text-xs tracking-wider bg-white border border-indigo-200 hover:bg-indigo-50 active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  {isGenerating ? generationStepText || "正在生成多篇文章..." : "一键生成5篇文章（Gemini 2篇 + DeepSeek 3篇）"}
+                </button>
+
+                {batchArticleResults.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-black text-slate-900">批量文章结果</h4>
+                      <span className="text-[10px] font-bold text-slate-400">{batchArticleResults.length}/5</span>
+                    </div>
+                    {batchArticleResults.map((article, index) => (
+                      <div key={article.id} className="bg-white/70 border border-slate-200 rounded-2xl p-4 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-[10px] font-black text-indigo-600 uppercase">
+                              第 {index + 1} 篇 · {article.platform} · {article.styleName}
+                            </div>
+                            <h5 className="text-sm font-black text-slate-900 mt-1">{article.title}</h5>
+                          </div>
+                          <span className="shrink-0 px-2 py-1 rounded-lg bg-slate-100 text-[10px] font-black text-slate-500">
+                            {article.fallbackUsed ? `${article.requestedProvider}→${article.provider}` : article.provider}
+                          </span>
+                        </div>
+                        <textarea
+                          value={article.content}
+                          onChange={(e) => setBatchArticleResults(batchArticleResults.map(item =>
+                            item.id === article.id ? { ...item, content: e.target.value } : item
+                          ))}
+                          className="w-full min-h-48 bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs leading-relaxed text-slate-700 focus:outline-none focus:border-indigo-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleCopy(article.content, `第${index + 1}篇文章`)}
+                          className="px-3 py-2 bg-slate-900 text-white rounded-xl font-bold text-[10px] cursor-pointer"
+                        >
+                          复制这篇
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

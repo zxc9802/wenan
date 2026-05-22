@@ -53,3 +53,19 @@ test("LLM chat route owns server-side model configuration", () => {
   assert.match(llmRouteSource, /process\.env\.LLM_API_BASE_URL/);
   assert.match(llmRouteSource, /process\.env\.LLM_MODEL/);
 });
+
+test("LLM chat route supports Gemini and DeepSeek with provider fallback", () => {
+  assert.match(llmRouteSource, /type LlmProvider = "gemini" \| "deepseek"/);
+  assert.match(llmRouteSource, /preferredProvider\?: LlmProvider/);
+  assert.match(llmRouteSource, /DEEPSEEK_API_KEY/);
+  assert.match(llmRouteSource, /GEMINI_API_KEY/);
+  assert.match(llmRouteSource, /fallbackProvider/);
+  assert.match(llmRouteSource, /attempts\.push/);
+});
+
+test("copywriting workspace exposes one-click five-article generation", () => {
+  assert.match(pageSource, /batchArticleResults/);
+  assert.match(pageSource, /executeBatchCopywritingGeneration/);
+  assert.match(pageSource, /gemini.*gemini.*deepseek.*deepseek.*deepseek/s);
+  assert.match(pageSource, /一键生成5篇文章/);
+});
