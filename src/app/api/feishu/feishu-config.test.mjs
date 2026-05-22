@@ -67,5 +67,15 @@ test("copywriting workspace exposes one-click five-article generation", () => {
   assert.match(pageSource, /batchArticleResults/);
   assert.match(pageSource, /executeBatchCopywritingGeneration/);
   assert.match(pageSource, /gemini.*gemini.*deepseek.*deepseek.*deepseek/s);
-  assert.match(pageSource, /一键生成5篇文章/);
+  assert.match(pageSource, /一键生成所选类型各5篇文章/);
+});
+
+test("copywriting workspace generates five articles per selected platform and preserves step results", () => {
+  assert.match(pageSource, /targetPlatforms\.flatMap/);
+  assert.match(pageSource, /articleNumber: variantIndex \+ 1/);
+  assert.match(pageSource, /selectedBatchPlatform/);
+  assert.match(pageSource, /selectedBatchArticleNumber/);
+  assert.match(pageSource, /batchPlatforms\.map/);
+  assert.match(pageSource, /\[1, 2, 3, 4, 5\]\.map/);
+  assert.match(pageSource, /onClick=\{\(\) => setCurrentStep\(s\.id\)\}/);
 });

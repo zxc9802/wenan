@@ -129,6 +129,7 @@ interface BatchArticleResult {
   id: string;
   title: string;
   platform: string;
+  articleNumber: number;
   content: string;
   provider: LlmProvider;
   requestedProvider: LlmProvider;
@@ -383,6 +384,8 @@ export default function Home() {
   const [deconstructionResult, setDeconstructionResult] = useState<DeconstructionResult | null>(null);
   const [agentResult, setAgentResult] = useState<AgentOutput | null>(null);
   const [batchArticleResults, setBatchArticleResults] = useState<BatchArticleResult[]>([]);
+  const [selectedBatchPlatform, setSelectedBatchPlatform] = useState("");
+  const [selectedBatchArticleNumber, setSelectedBatchArticleNumber] = useState(1);
 
   // 并排工坊与修改状态
   const [editableScripts, setEditableScripts] = useState<{
@@ -1320,21 +1323,32 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
       ? "私信我‘自查’，送你一份我亲自整理的《老板AI转型排雷自查表》，直接对照避雷。"
       : "私信我‘诊断’，约一次我的团队《中小企业AI经营一对一诊断服务》，帮你肉眼揪出管理内耗。";
 
-    const batchPlan: { provider: LlmProvider; styleName: string; stylePrompt: string; platform: string }[] = [
-      { provider: "gemini", styleName: "犀利打脸口播", platform: "抖音", stylePrompt: "开头像老板当场拍桌复盘，语气尖锐、反常识、节奏快，但事实必须克制。" },
-      { provider: "gemini", styleName: "冷静经营复盘", platform: "视频号", stylePrompt: "语气沉稳、有经营复盘感，像老板在会议后讲透一个判断，少用夸张词。" },
-      { provider: "deepseek", styleName: "小红书清单干货", platform: "小红书", stylePrompt: "用收藏型图文结构，短句、分点、强干货感，适合老板转发给团队。" },
-      { provider: "deepseek", styleName: "踩坑自白故事", platform: "抖音", stylePrompt: "用第一人称讲踩坑过程，先承认自己也走过弯路，再给出真实案例判断。" },
-      { provider: "deepseek", styleName: "咨询转化强钩子", platform: "视频号", stylePrompt: "开头更像咨询诊断现场，强调问题识别和行动边界，结尾自然引导私信。" },
+    const styleVariants = [
+      { provider: "gemini" as const, styleName: "犀利打脸口播", stylePrompt: "开头像老板当场拍桌复盘，语气尖锐、反常识、节奏快，但事实必须克制。" },
+      { provider: "gemini" as const, styleName: "冷静经营复盘", stylePrompt: "语气沉稳、有经营复盘感，像老板在会议后讲透一个判断，少用夸张词。" },
+      { provider: "deepseek" as const, styleName: "清单干货拆解", stylePrompt: "用收藏型结构，短句、分点、强干货感，适合老板转发给团队。" },
+      { provider: "deepseek" as const, styleName: "踩坑自白故事", stylePrompt: "用第一人称讲踩坑过程，先承认自己也走过弯路，再给出真实案例判断。" },
+      { provider: "deepseek" as const, styleName: "咨询转化强钩子", stylePrompt: "开头更像咨询诊断现场，强调问题识别和行动边界，结尾自然引导私信。" },
     ];
+    const batchPlan = targetPlatforms.flatMap((platform) =>
+      styleVariants.map((variant, variantIndex) => ({
+        ...variant,
+        platform,
+        articleNumber: variantIndex + 1,
+      }))
+    );
 
     setIsGenerating(true);
     setBatchArticleResults([]);
+    setSelectedBatchPlatform(targetPlatforms[0] || "");
+    setSelectedBatchArticleNumber(1);
+    setEditableScripts(null);
+    setAgentResult(null);
 
     try {
       const nextResults: BatchArticleResult[] = [];
       for (const [index, item] of batchPlan.entries()) {
-        setGenerationStepText(`正在生成第 ${index + 1}/5 篇：${item.styleName}（优先 ${item.provider}，失败自动换另一个模型）...`);
+        setGenerationStepText(`正在生成 ${item.platform} 第 ${item.articleNumber}/5 篇：${item.styleName}（总进度 ${index + 1}/${batchPlan.length}）...`);
 
         const systemPrompt = `你是老黄AI经营IP的原创商业文章引擎。请根据真实案例和爆款骨架生成一篇可直接发布的完整文章。
 
@@ -1357,6 +1371,7 @@ IP定位：${ipPosition.ipDefinition}
 启发：${selectedCase.insight}
 
 本篇目标平台：${item.platform}
+本平台文章编号：第 ${item.articleNumber} 篇，共 5 篇
 本篇风格：${item.styleName}
 风格指令：${item.stylePrompt}
 
@@ -1388,6 +1403,7 @@ JSON 结构：
             id: `batch-${Date.now()}-${index}`,
             title: parsed.title || `${selectedCase.name}｜${item.styleName}`,
             platform: parsed.platform || item.platform,
+            articleNumber: item.articleNumber,
             content: appendRequiredCta(parsed.content || "", ctaText),
             cta: ctaText,
             provider: usedProvider,
@@ -1400,6 +1416,7 @@ JSON 结构：
             id: `batch-local-${Date.now()}-${index}`,
             title: `${selectedCase.name}｜${item.styleName}`,
             platform: item.platform,
+            articleNumber: item.articleNumber,
             content: appendRequiredCta(`这篇先用本地装配兜底：${selectedCase.name}最早的问题是，${selectedCase.originalProblem}\n\n我们实际做的动作是：${selectedCase.action}\n\n最后结果很直接：${selectedCase.result}\n\n我从这里得到的判断是：${selectedCase.insight}\n\n这不是换一个工具名就能解决的事，而是老板要先把问题、动作和结果讲清楚。`, ctaText),
             cta: ctaText,
             provider: item.provider,
@@ -1413,7 +1430,7 @@ JSON 结构：
         setBatchArticleResults([...nextResults]);
       }
 
-      showToast("一键生成5篇文章完成，已按 Gemini 2篇、DeepSeek 3篇分工输出。", "success");
+      showToast(`已生成 ${batchPlan.length} 篇文章：每个所选类型各 5 篇。`, "success");
       setCurrentStep(4);
     } finally {
       setIsGenerating(false);
@@ -1603,6 +1620,8 @@ ${ctaText}`;
   // ==========================================
   // 12. 视图渲染 (Apple Glassmorphism UI)
   // ==========================================
+  void executeCopywritingGenerationChain;
+
   if (isSessionLoading) {
     return (
       <div className="min-h-screen bg-slate-50/70 text-slate-800 font-sans flex items-center justify-center">
@@ -1612,6 +1631,12 @@ ${ctaText}`;
       </div>
     );
   }
+
+  const batchPlatforms = Array.from(new Set(batchArticleResults.map((article) => article.platform)));
+  const activeBatchPlatform = selectedBatchPlatform || batchPlatforms[0] || "";
+  const activeBatchArticle = batchArticleResults.find(
+    (article) => article.platform === activeBatchPlatform && article.articleNumber === selectedBatchArticleNumber
+  ) || batchArticleResults.find((article) => article.platform === activeBatchPlatform);
 
   return (
     <div className="min-h-screen bg-slate-50/70 text-slate-800 font-sans selection:bg-indigo-600 selection:text-white pb-20 relative overflow-hidden antialiased">
@@ -1819,15 +1844,18 @@ ${ctaText}`;
                   const isPassed = currentStep > s.id;
                   return (
                     <div key={s.id} className="flex items-center gap-1">
-                      <span className={`px-2.5 py-1.5 rounded-lg transition-all ${
+                      <button
+                        type="button"
+                        onClick={() => setCurrentStep(s.id)}
+                        className={`px-2.5 py-1.5 rounded-lg transition-all cursor-pointer ${
                         isActive
                           ? "bg-indigo-600 text-white stepper-glow-active"
                           : isPassed
                             ? "bg-emerald-50 border border-emerald-100 text-emerald-600"
-                            : "bg-slate-200/50"
+                            : "bg-slate-200/50 hover:bg-slate-200"
                       }`}>
                         {s.label}
-                      </span>
+                      </button>
                       {s.id < 5 && <span className="text-slate-300">→</span>}
                     </div>
                   );
@@ -2187,7 +2215,7 @@ ${ctaText}`;
                 <button
                   type="button"
                   disabled={isGenerating || targetPlatforms.length === 0}
-                  onClick={executeCopywritingGenerationChain}
+                  onClick={executeBatchCopywritingGeneration}
                   className="w-full py-5 rounded-2xl text-white font-extrabold text-xs tracking-wider bg-gradient-to-r from-indigo-600 to-violet-600 hover:shadow-lg hover:shadow-indigo-500/20 active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
                 >
                   {isGenerating ? (
@@ -2203,18 +2231,9 @@ ${ctaText}`;
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
                       </svg>
-                      生成三端定稿（抖音 / 小红书 / 视频号）
+                      一键生成所选类型各5篇文章
                     </>
                   )}
-                </button>
-
-                <button
-                  type="button"
-                  disabled={isGenerating}
-                  onClick={executeBatchCopywritingGeneration}
-                  className="w-full py-4 rounded-2xl text-indigo-700 font-extrabold text-xs tracking-wider bg-white border border-indigo-200 hover:bg-indigo-50 active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
-                >
-                  {isGenerating ? generationStepText || "正在生成多篇文章..." : "一键生成5篇文章（Gemini 2篇 + DeepSeek 3篇）"}
                 </button>
 
               </div>
@@ -2253,53 +2272,88 @@ ${ctaText}`;
 
                 {batchArticleResults.length > 0 && (
                   <div className="space-y-4">
-                    <div className="glass-panel rounded-3xl p-5 border border-white/30 flex items-center justify-between">
+                    <div className="glass-panel rounded-3xl p-5 border border-white/30 space-y-4">
                       <div>
-                        <h4 className="text-xs font-black text-slate-900">一键生成5篇文章结果</h4>
+                        <h4 className="text-xs font-black text-slate-900">所选类型各5篇文章结果</h4>
                         <p className="text-[10px] text-slate-400 mt-1 font-semibold">
-                          默认分工：Gemini 2篇，DeepSeek 3篇；若某个模型报错，服务端会自动换另一个模型接管。
+                          每个内容类型单独生成 5 篇；先切换类型，再用 1-5 查看对应文章。切换步骤不会清空这里的生成结果。
                         </p>
                       </div>
-                      <span className="text-xs font-black text-indigo-600">{batchArticleResults.length}/5</span>
-                    </div>
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                      {batchArticleResults.map((article, index) => (
-                        <div key={article.id} className="glass-panel rounded-3xl p-5 border border-white/20 shadow-lg space-y-3">
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <div className="text-[10px] font-black text-indigo-600 uppercase">
-                                第 {index + 1} 篇 · {article.platform} · {article.styleName}
-                              </div>
-                              <input
-                                type="text"
-                                value={article.title}
-                                onChange={(e) => setBatchArticleResults(batchArticleResults.map(item =>
-                                  item.id === article.id ? { ...item, title: e.target.value } : item
-                                ))}
-                                className="mt-2 w-full bg-white/50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm font-black text-slate-900 focus:outline-none focus:border-indigo-500"
-                              />
-                            </div>
-                            <span className="shrink-0 px-2 py-1 rounded-lg bg-slate-100 text-[10px] font-black text-slate-500">
-                              {article.fallbackUsed ? `${article.requestedProvider}→${article.provider}` : article.provider}
-                            </span>
-                          </div>
-                          <textarea
-                            value={article.content}
-                            onChange={(e) => setBatchArticleResults(batchArticleResults.map(item =>
-                              item.id === article.id ? { ...item, content: e.target.value } : item
-                            ))}
-                            className="w-full h-80 bg-white/50 border border-slate-200 rounded-xl p-3 text-xs font-semibold leading-relaxed text-slate-700 focus:outline-none focus:border-indigo-500 resize-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleCopy(`${article.title}\n\n${article.content}`, `第${index + 1}篇文章`)}
-                            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] rounded-xl transition-all cursor-pointer"
-                          >
-                            复制这篇文章
-                          </button>
+                      <div className="flex flex-col lg:flex-row gap-4 lg:items-center lg:justify-between">
+                        <div className="flex flex-wrap gap-2">
+                          {batchPlatforms.map((platform) => (
+                            <button
+                              key={platform}
+                              type="button"
+                              onClick={() => {
+                                setSelectedBatchPlatform(platform);
+                                setSelectedBatchArticleNumber(1);
+                              }}
+                              className={`px-4 py-2 rounded-xl text-[10px] font-black border transition-all cursor-pointer ${
+                                activeBatchPlatform === platform
+                                  ? "bg-indigo-600 border-indigo-600 text-white shadow-md"
+                                  : "bg-white/70 border-slate-200 text-slate-500 hover:bg-indigo-50"
+                              }`}
+                            >
+                              {platform} · 5篇
+                            </button>
+                          ))}
                         </div>
-                      ))}
+                        <div className="flex gap-2">
+                          {[1, 2, 3, 4, 5].map((articleNumber) => (
+                            <button
+                              key={articleNumber}
+                              type="button"
+                              onClick={() => setSelectedBatchArticleNumber(articleNumber)}
+                              className={`w-9 h-9 rounded-xl text-xs font-black border transition-all cursor-pointer ${
+                                selectedBatchArticleNumber === articleNumber
+                                  ? "bg-slate-950 border-slate-950 text-white"
+                                  : "bg-white/70 border-slate-200 text-slate-500 hover:bg-slate-100"
+                              }`}
+                            >
+                              {articleNumber}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </div>
+
+                    {activeBatchArticle && (
+                      <div className="glass-panel rounded-3xl p-5 border border-white/20 shadow-lg space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1">
+                            <div className="text-[10px] font-black text-indigo-600 uppercase">
+                              {activeBatchArticle.platform} · 第 {activeBatchArticle.articleNumber} 篇 · {activeBatchArticle.styleName}
+                            </div>
+                            <input
+                              type="text"
+                              value={activeBatchArticle.title}
+                              onChange={(e) => setBatchArticleResults(batchArticleResults.map(item =>
+                                item.id === activeBatchArticle.id ? { ...item, title: e.target.value } : item
+                              ))}
+                              className="mt-2 w-full bg-white/50 border border-slate-200 rounded-lg px-2.5 py-2 text-sm font-black text-slate-900 focus:outline-none focus:border-indigo-500"
+                            />
+                          </div>
+                          <span className="shrink-0 px-2 py-1 rounded-lg bg-slate-100 text-[10px] font-black text-slate-500">
+                            {activeBatchArticle.fallbackUsed ? `${activeBatchArticle.requestedProvider}→${activeBatchArticle.provider}` : activeBatchArticle.provider}
+                          </span>
+                        </div>
+                        <textarea
+                          value={activeBatchArticle.content}
+                          onChange={(e) => setBatchArticleResults(batchArticleResults.map(item =>
+                            item.id === activeBatchArticle.id ? { ...item, content: e.target.value } : item
+                          ))}
+                          className="w-full h-[520px] bg-white/50 border border-slate-200 rounded-xl p-4 text-xs font-semibold leading-relaxed text-slate-700 focus:outline-none focus:border-indigo-500 resize-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleCopy(`${activeBatchArticle.title}\n\n${activeBatchArticle.content}`, `${activeBatchArticle.platform}第${activeBatchArticle.articleNumber}篇文章`)}
+                          className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] rounded-xl transition-all cursor-pointer"
+                        >
+                          复制当前文章
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
