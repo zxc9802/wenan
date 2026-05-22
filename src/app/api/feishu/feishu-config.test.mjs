@@ -63,6 +63,13 @@ test("LLM chat route supports Gemini and DeepSeek with provider fallback", () =>
   assert.match(llmRouteSource, /attempts\.push/);
 });
 
+test("LLM chat route falls back from Gemini flash to Gemini pro before provider fallback", () => {
+  assert.match(llmRouteSource, /GEMINI_FALLBACK_MODEL/);
+  assert.match(llmRouteSource, /gemini-3\.5-flash/);
+  assert.match(llmRouteSource, /gemini-3\.1-pro-preview/);
+  assert.match(llmRouteSource, /models:\s*\[/);
+});
+
 test("copywriting workspace exposes one-click five-article generation", () => {
   assert.match(pageSource, /batchArticleResults/);
   assert.match(pageSource, /executeBatchCopywritingGeneration/);

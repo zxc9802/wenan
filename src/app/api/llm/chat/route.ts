@@ -17,11 +17,14 @@ function cleanBaseUrl(value: string) {
 
 function getProviderConfig(provider: LlmProvider) {
   if (provider === "gemini") {
+    const primaryModel = process.env.GEMINI_MODEL || process.env.LLM_MODEL || process.env.OPENAI_MODEL || "gemini-3.5-flash";
+    const fallbackModel = process.env.GEMINI_FALLBACK_MODEL || "gemini-3.1-pro-preview";
+
     return {
       provider,
       apiKey: process.env.GEMINI_API_KEY || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "",
       baseUrl: cleanBaseUrl(process.env.GEMINI_API_BASE_URL || process.env.LLM_API_BASE_URL || process.env.OPENAI_BASE_URL || "https://ai.shanbaob.net/v1"),
-      model: process.env.GEMINI_MODEL || process.env.LLM_MODEL || process.env.OPENAI_MODEL || "gemini-3.1-pro-preview",
+      models: Array.from(new Set([primaryModel, fallbackModel].filter(Boolean))),
     };
   }
 
@@ -29,7 +32,7 @@ function getProviderConfig(provider: LlmProvider) {
     provider,
     apiKey: process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "",
     baseUrl: cleanBaseUrl(process.env.DEEPSEEK_API_BASE_URL || "https://api.deepseek.com/v1"),
-    model: process.env.DEEPSEEK_MODEL || "deepseek-v4-flash",
+    models: [process.env.DEEPSEEK_MODEL || "deepseek-v4-flash"],
   };
 }
 
@@ -39,7 +42,7 @@ function getProviderOrder(preferredProvider?: LlmProvider, fallbackProvider?: Ll
   return Array.from(new Set([preferred, fallback].filter((provider): provider is LlmProvider => provider === "gemini" || provider === "deepseek")));
 }
 
-async function callChatCompletion(provider: LlmProvider, body: ChatRequestBody) {
+async function callChatCompletion(provider: LlmProvider, body: ChatRequestBody, model: string) {
   const config = getProviderConfig(provider);
   if (!config.apiKey) {
     throw new Error(`${provider} 未配置 API Key`);
@@ -52,7 +55,7 @@ async function callChatCompletion(provider: LlmProvider, body: ChatRequestBody) 
       Authorization: `Bearer ${config.apiKey}`,
     },
     body: JSON.stringify({
-      model: config.model,
+      model,
       messages: body.messages,
       temperature: body.temperature ?? 0.7,
       ...(provider === "deepseek" ? {
@@ -71,7 +74,7 @@ async function callChatCompletion(provider: LlmProvider, body: ChatRequestBody) 
     throw error;
   }
 
-  return { data, provider };
+  return { data, provider, model };
 }
 
 export async function POST(request: Request) {
@@ -89,21 +92,25 @@ export async function POST(request: Request) {
 
     const attempts = [];
     for (const provider of getProviderOrder(body.preferredProvider, body.fallbackProvider)) {
-      try {
-        const { data, provider: usedProvider } = await callChatCompletion(provider, body);
-        return NextResponse.json({
-          ...data,
-          _provider: usedProvider,
-          _fallbackUsed: usedProvider !== body.preferredProvider,
-          _attempts: attempts,
-        });
-      } catch (error) {
-        attempts.push({
-          provider,
-          status: typeof error === "object" && error && "status" in error ? (error as { status?: number }).status : 500,
-          error: error instanceof Error ? error.message : String(error),
-          detail: typeof error === "object" && error && "detail" in error ? (error as { detail?: unknown }).detail : undefined,
-        });
+      for (const model of getProviderConfig(provider).models) {
+        try {
+          const { data, provider: usedProvider, model: usedModel } = await callChatCompletion(provider, body, model);
+          return NextResponse.json({
+            ...data,
+            _provider: usedProvider,
+            _model: usedModel,
+            _fallbackUsed: usedProvider !== body.preferredProvider || attempts.length > 0,
+            _attempts: attempts,
+          });
+        } catch (error) {
+          attempts.push({
+            provider,
+            model,
+            status: typeof error === "object" && error && "status" in error ? (error as { status?: number }).status : 500,
+            error: error instanceof Error ? error.message : String(error),
+            detail: typeof error === "object" && error && "detail" in error ? (error as { detail?: unknown }).detail : undefined,
+          });
+        }
       }
     }
 
