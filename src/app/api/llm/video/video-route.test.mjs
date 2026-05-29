@@ -8,7 +8,9 @@ const pageSource = readFileSync(new URL("../../../page.tsx", import.meta.url), "
 test("video parser posts uploaded local video to the server-side Gemini video route", () => {
   assert.match(pageSource, /fetch\("\/api\/llm\/video"/);
   assert.match(pageSource, /mimeType/);
-  assert.match(pageSource, /base64Data/);
+  assert.match(pageSource, /objectKey/);
+  assert.match(pageSource, /fetch\("\/api\/r2\/video-upload"/);
+  assert.match(pageSource, /uploadUrl/);
 });
 
 test("video upload status is distinct from parsed-and-filled status", () => {
@@ -42,5 +44,28 @@ test("Gemini video route supports OpenAI-compatible video chat completions", () 
   assert.match(routeSource, /chat\/completions/);
   assert.match(routeSource, /Authorization: `Bearer \$\{config\.apiKey\}`/);
   assert.match(routeSource, /type: "video_url"/);
-  assert.match(routeSource, /url: `data:\$\{body\.mimeType\};base64,\$\{body\.base64Data\}`/);
+  assert.match(routeSource, /resolveVideoUrl/);
+  assert.match(routeSource, /body\.videoUrl/);
+});
+
+test("video parser deletes R2 temp object after model parsing finishes", () => {
+  const routeSource = readFileSync(routeUrl, "utf8");
+  assert.match(routeSource, /deleteTempR2Object/);
+  assert.match(routeSource, /finally/);
+});
+
+test("video parser rejects incomplete model output instead of filling local defaults", () => {
+  assert.match(pageSource, /validateVideoParseContent/);
+  assert.doesNotMatch(pageSource, /content\.visualHook \|\| "指着镜头拍桌/);
+  assert.doesNotMatch(pageSource, /content\.content \|\| `别再自嗨了/);
+});
+
+test("R2 upload route presigns temporary browser uploads", () => {
+  const uploadRouteUrl = new URL("../../r2/video-upload/route.ts", import.meta.url);
+  assert.equal(existsSync(uploadRouteUrl), true, "R2 upload route should exist");
+
+  const uploadRouteSource = readFileSync(uploadRouteUrl, "utf8");
+  assert.match(uploadRouteSource, /createPresignedR2Upload/);
+  assert.match(uploadRouteSource, /uploadUrl/);
+  assert.match(uploadRouteSource, /objectKey/);
 });

@@ -126,6 +126,27 @@ interface DeconstructionResult {
 type LlmProvider = "gemini" | "deepseek";
 type VideoParseStatus = "idle" | "uploaded" | "parsing" | "parsed";
 
+type VideoParseContent = {
+  author: string;
+  title: string;
+  reason: string;
+  content: string;
+  visualHook: string;
+  emotionCurve: string;
+  conflictFriction: string;
+  editingTempo: string;
+  caseDemonstration: string;
+  goldenFormula: string;
+  conversionHook: string;
+};
+
+type R2VideoUploadResponse = {
+  success?: boolean;
+  uploadUrl?: string;
+  objectKey?: string;
+  error?: string;
+};
+
 interface BatchArticleResult {
   id: string;
   title: string;
@@ -779,13 +800,13 @@ export default function Home() {
       originalContent: matContent,
       viralReason: matReason || "前三秒痛点强烈，冲突明确，能迅速抓住企业老板注意力。",
       videoSrc: matVideoFile || undefined,
-      videoVisualHook: matVideoVisualHook || "3秒黄金视觉钩子：指着屏幕拍案大叫",
-      videoEmotionCurve: matVideoEmotionCurve || "平稳切入 → 剧烈打脸冲突 → 降温诚恳揭底",
-      videoConflictFriction: matVideoConflictFriction || "冲突点：花百万做AI系统 vs 连SOP流程都没有",
-      videoEditingTempo: matVideoEditingTempo || "每4秒进行视觉切镜头，配激昂打脸节奏曲",
-      videoCaseDemonstration: matVideoCaseDemonstration || "用真实踩坑案例呈现转型前后的成败对比",
-      videoGoldenFormula: matVideoGoldenFormula || "逻辑金句：流程乱，AI就只是放大了十倍低效。",
-      videoConversionHook: matVideoConversionHook || "诱饵：老板AI自查表，强力收割私信",
+      videoVisualHook: matVideoVisualHook,
+      videoEmotionCurve: matVideoEmotionCurve,
+      videoConflictFriction: matVideoConflictFriction,
+      videoEditingTempo: matVideoEditingTempo,
+      videoCaseDemonstration: matVideoCaseDemonstration,
+      videoGoldenFormula: matVideoGoldenFormula,
+      videoConversionHook: matVideoConversionHook,
       createdAt: new Date().toISOString()
     };
     const updated = [newMat, ...materials];
@@ -908,6 +929,84 @@ export default function Home() {
     return fenced ? fenced[1].trim() : trimmed;
   };
 
+  const validateVideoParseContent = (value: unknown): VideoParseContent => {
+    const content = value as Partial<Record<keyof VideoParseContent, unknown>> & { error?: unknown };
+    if (typeof content?.error === "string" && content.error.trim()) {
+      throw new Error(`模型没有成功读取视频：${content.error.trim()}`);
+    }
+
+    const fields: { key: keyof VideoParseContent; label: string }[] = [
+      { key: "author", label: "发言人/博主" },
+      { key: "title", label: "视频标题" },
+      { key: "reason", label: "爆款诱因" },
+      { key: "content", label: "原视频口播文案" },
+      { key: "visualHook", label: "黄金 Hook 画面动作" },
+      { key: "emotionCurve", label: "情绪温度曲线" },
+      { key: "conflictFriction", label: "戏剧冲突摩擦" },
+      { key: "editingTempo", label: "剪辑节奏与 BGM" },
+      { key: "caseDemonstration", label: "竞品案例证明逻辑" },
+      { key: "goldenFormula", label: "高赞商业金句公式" },
+      { key: "conversionHook", label: "私域留资动作钩子" },
+    ];
+
+    const normalized = {} as VideoParseContent;
+    const missing = fields.filter(({ key }) => {
+      const fieldValue = content?.[key];
+      if (typeof fieldValue !== "string" || !fieldValue.trim()) return true;
+      normalized[key] = fieldValue.trim();
+      return false;
+    });
+
+    if (missing.length > 0) {
+      throw new Error(`模型返回字段不完整，未回填默认文案。缺少：${missing.map(field => field.label).join("、")}`);
+    }
+
+    return normalized;
+  };
+
+  const uploadVideoToR2 = async (dataUrl: string, fileName: string) => {
+    const payload = getDataUrlPayload(dataUrl);
+    const blob = dataURLtoBlob(dataUrl);
+    if (!blob.size) {
+      throw new Error("视频文件为空，请重新上传");
+    }
+
+    const presignResponse = await fetch("/api/r2/video-upload", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        fileName: fileName || "video.mp4",
+        contentType: payload.mimeType,
+        size: blob.size,
+      }),
+    });
+    const presignData = await presignResponse.json().catch(() => ({})) as R2VideoUploadResponse;
+
+    if (!presignResponse.ok || !presignData.uploadUrl || !presignData.objectKey) {
+      throw new Error(presignData.error || `R2 上传地址生成失败 (状态码 ${presignResponse.status})`);
+    }
+
+    const uploadResponse = await fetch(presignData.uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": payload.mimeType,
+      },
+      body: blob,
+    });
+
+    if (!uploadResponse.ok) {
+      const errBody = await uploadResponse.text().catch(() => "");
+      throw new Error(`视频上传 R2 失败 (状态码 ${uploadResponse.status}): ${errBody.slice(0, 120)}`);
+    }
+
+    return {
+      mimeType: payload.mimeType,
+      objectKey: presignData.objectKey,
+    };
+  };
+
   const hasClientLlmConfig = () => false;
 
   const requestChatCompletion = async (
@@ -1025,7 +1124,7 @@ export default function Home() {
         const systemPrompt = `你是一位世界顶尖的短视频多模态结构拆解与复刻专家。
 你的任务是解析并高保真还原一个商业爆款短视频（通常为老黄这类商业大咖口播、老板IP转型、组织效率提升、AI赋能企业管理的视频）。
 当前用户已上传视频文件，文件名称为: "${uploadedVideoName || "高手口播参考视频"}"。
-${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真实音轨原文】：\n"""\n${transcriptText}\n"""\n请基于该真实文案进行极其严谨的骨架结构分析。` : `（由于未检测到 ASR 音轨或 API 限制，请结合视频标题“${uploadedVideoName}”推理、脑补并高度拟真一个符合该商业主题的高水准口播视频）`}
+${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真实音轨原文】：\n"""\n${transcriptText}\n"""\n请基于该真实文案和视频画面进行极其严谨的骨架结构分析。` : `请只依据视频本体里的画面、声音、字幕和节奏进行分析。若无法读取视频本体，请返回 {"error":"无法读取视频本体"}，禁止仅根据文件名脑补或编造默认拆解内容。`}
 必须返回严格的 JSON 对象，包含以下字段，并且不要有任何 Markdown 包裹标记：
 {
   "author": "提取出的视频发言人/博主，如：老黄·实战派CEO 或 商业大咖",
@@ -1041,7 +1140,9 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
   "conversionHook": "7. 私域留资动作引流动作，如：评论区二收，回复“转型”即可免费领《老板AI转型SOP避坑表》"
 }`;
 
-        const videoPayload = getDataUrlPayload(matVideoFile);
+        setParsingVideoStep("正在上传视频到 Cloudflare R2 临时对象存储...");
+        const videoPayload = await uploadVideoToR2(matVideoFile, uploadedVideoName || "video.mp4");
+        setParsingVideoStep("R2 临时视频 URL 已生成，正在交给 Gemini 读取视频本体...");
         const response = await fetch("/api/llm/video", {
           method: "POST",
           headers: {
@@ -1049,7 +1150,7 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
           },
           body: JSON.stringify({
             mimeType: videoPayload.mimeType,
-            base64Data: videoPayload.base64Data,
+            objectKey: videoPayload.objectKey,
             prompt: `${systemPrompt}\n\n请直接基于这个视频本体（画面、声音、字幕、节奏）进行深层结构剖析，返回严格 JSON。`,
             temperature: 0.7
           })
@@ -1059,19 +1160,19 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
           const resData = await response.json();
           const rawContent = readChatCompletionContent(resData as { choices?: { message?: { content?: string } }[] });
           const usedModel = readChatCompletionModel(resData as { _model?: string });
-          const content = JSON.parse(extractLLMJsonText(rawContent));
+          const content = validateVideoParseContent(JSON.parse(extractLLMJsonText(rawContent)));
 
-          setMatAuthor(content.author || "老黄·AI提效实干家");
-          setMatTitle(content.title || `关于《${uploadedVideoName.replace(/\.[^/.]+$/, "")}》的解析`);
-          setMatReason(content.reason || "开篇以极致反常识论点打脸自嗨老板，极度真实踩坑数据自证，直面企业生存痛点");
-          setMatContent(content.content || `别再自嗨了！针对这个视频《${uploadedVideoName}》，核心观点只有一个：流程不顺，盲目上AI系统就是加速混乱！先梳理SOP，再买工具！`);
-          setMatVideoVisualHook(content.visualHook || "指着镜头拍桌，伴随‘警报声’音效，大字报弹出《避坑指南》");
-          setMatVideoEmotionCurve(content.emotionCurve || "极度痛惜(0-15s) → 理性痛击(15-45s) → 诚恳同行人揭秘(45s-结尾)");
-          setMatVideoConflictFriction(content.conflictFriction || "员工每天忙着调戏AI助手 VS 核心业务流程零沉淀");
-          setMatVideoEditingTempo(content.editingTempo || "配合重音鼓点，每3秒快速拉近镜头，关键句上黄色加粗大字幕");
-          setMatVideoCaseDemonstration(content.caseDemonstration || "展示视频中提及 of GMV 数据或业务优化对比，用精准数据说话");
-          setMatVideoGoldenFormula(content.goldenFormula || "句式「业务不X，引入再先进的Y也只是加速折腾」");
-          setMatVideoConversionHook(content.conversionHook || "评论区二收，回复“转型”即可免费领《老板AI转型SOP避坑表》");
+          setMatAuthor(content.author);
+          setMatTitle(content.title);
+          setMatReason(content.reason);
+          setMatContent(content.content);
+          setMatVideoVisualHook(content.visualHook);
+          setMatVideoEmotionCurve(content.emotionCurve);
+          setMatVideoConflictFriction(content.conflictFriction);
+          setMatVideoEditingTempo(content.editingTempo);
+          setMatVideoCaseDemonstration(content.caseDemonstration);
+          setMatVideoGoldenFormula(content.goldenFormula);
+          setMatVideoConversionHook(content.conversionHook);
 
           setVideoParseStatus("parsed");
           showToast(`已成功调用 Gemini 视频模型【${usedModel}】为您解析视频！`, "success");

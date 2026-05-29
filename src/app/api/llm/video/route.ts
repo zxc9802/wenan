@@ -1,11 +1,23 @@
 import { NextResponse } from "next/server";
 import { sessionErrorResponse } from "@/app/lib/server/app-session";
+import { createPresignedR2ReadUrl, deleteTempR2Object } from "@/app/lib/server/r2";
 
 type VideoParseRequestBody = {
   mimeType?: string;
   base64Data?: string;
+  videoUrl?: string;
+  objectKey?: string;
   prompt?: string;
   temperature?: number;
+};
+
+type ResolvedVideoParseRequestBody = {
+  mimeType: string;
+  base64Data?: string;
+  videoUrl?: string;
+  objectKey?: string;
+  prompt: string;
+  temperature: number;
 };
 
 type GeminiGenerateContentResponse = {
@@ -89,7 +101,40 @@ function errorDetail(error: unknown) {
   return typeof error === "object" && error && "detail" in error ? (error as { detail?: unknown }).detail : undefined;
 }
 
-async function callGoogleGeminiVideo(body: Required<VideoParseRequestBody>, model: string, config: ReturnType<typeof getGeminiVideoConfig>) {
+async function resolveVideoUrl(body: ResolvedVideoParseRequestBody) {
+  if (body.objectKey) {
+    return createPresignedR2ReadUrl(body.objectKey);
+  }
+
+  if (body.videoUrl) {
+    if (!/^https:\/\//i.test(body.videoUrl)) {
+      throw new Error("视频 URL 必须是 HTTPS 地址");
+    }
+    return body.videoUrl;
+  }
+
+  if (body.base64Data) {
+    return `data:${body.mimeType};base64,${body.base64Data}`;
+  }
+
+  throw new Error("缺少可供模型读取的视频数据");
+}
+
+async function callGoogleGeminiVideo(body: ResolvedVideoParseRequestBody, model: string, config: ReturnType<typeof getGeminiVideoConfig>) {
+  const videoPart = body.base64Data
+    ? {
+        inline_data: {
+          mime_type: body.mimeType,
+          data: body.base64Data,
+        },
+      }
+    : {
+        file_data: {
+          mime_type: body.mimeType,
+          file_uri: await resolveVideoUrl(body),
+        },
+      };
+
   const upstream = await fetch(buildGenerateContentUrl(config.baseUrl, model), {
     method: "POST",
     headers: {
@@ -101,12 +146,7 @@ async function callGoogleGeminiVideo(body: Required<VideoParseRequestBody>, mode
         {
           role: "user",
           parts: [
-            {
-              inline_data: {
-                mime_type: body.mimeType,
-                data: body.base64Data,
-              },
-            },
+            videoPart,
             {
               text: body.prompt,
             },
@@ -137,7 +177,9 @@ async function callGoogleGeminiVideo(body: Required<VideoParseRequestBody>, mode
   return content;
 }
 
-async function callOpenAiCompatibleVideo(body: Required<VideoParseRequestBody>, model: string, config: ReturnType<typeof getGeminiVideoConfig>) {
+async function callOpenAiCompatibleVideo(body: ResolvedVideoParseRequestBody, model: string, config: ReturnType<typeof getGeminiVideoConfig>) {
+  const videoUrl = await resolveVideoUrl(body);
+
   const upstream = await fetch(buildOpenAiChatCompletionsUrl(config.baseUrl), {
     method: "POST",
     headers: {
@@ -157,7 +199,7 @@ async function callOpenAiCompatibleVideo(body: Required<VideoParseRequestBody>, 
             {
               type: "video_url",
               video_url: {
-                url: `data:${body.mimeType};base64,${body.base64Data}`,
+                url: videoUrl,
               },
             },
           ],
@@ -185,7 +227,7 @@ async function callOpenAiCompatibleVideo(body: Required<VideoParseRequestBody>, 
   return content;
 }
 
-async function callGeminiVideo(body: Required<VideoParseRequestBody>, model: string) {
+async function callGeminiVideo(body: ResolvedVideoParseRequestBody, model: string) {
   const config = getGeminiVideoConfig();
   return config.protocol === "openai"
     ? callOpenAiCompatibleVideo(body, model, config)
@@ -193,6 +235,8 @@ async function callGeminiVideo(body: Required<VideoParseRequestBody>, model: str
 }
 
 export async function POST(request: Request) {
+  let cleanupObjectKey = "";
+
   try {
     const sessionError = await sessionErrorResponse(request);
     if (sessionError) return sessionError;
@@ -206,16 +250,20 @@ export async function POST(request: Request) {
     }
 
     const body = (await request.json()) as VideoParseRequestBody;
-    if (!body.mimeType?.startsWith("video/") || !body.base64Data || !body.prompt) {
+    cleanupObjectKey = body.objectKey || "";
+
+    if (!body.mimeType?.startsWith("video/") || !body.prompt || (!body.base64Data && !body.videoUrl && !body.objectKey)) {
       return NextResponse.json(
-        { success: false, error: "缺少视频 mimeType、base64Data 或 prompt 参数" },
+        { success: false, error: "缺少视频 mimeType、视频数据或 prompt 参数" },
         { status: 400 }
       );
     }
 
-    const requestBody: Required<VideoParseRequestBody> = {
+    const requestBody: ResolvedVideoParseRequestBody = {
       mimeType: body.mimeType,
       base64Data: body.base64Data,
+      videoUrl: body.videoUrl,
+      objectKey: body.objectKey,
       prompt: body.prompt,
       temperature: body.temperature ?? 0.7,
     };
@@ -272,5 +320,11 @@ export async function POST(request: Request) {
       { success: false, error: error instanceof Error ? error.message : String(error) },
       { status: 500 }
     );
+  } finally {
+    if (cleanupObjectKey) {
+      await deleteTempR2Object(cleanupObjectKey).catch((error) => {
+        console.warn("[r2-video-cleanup] 删除临时视频失败", error);
+      });
+    }
   }
 }
