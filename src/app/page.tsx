@@ -142,7 +142,6 @@ type VideoParseContent = {
 
 type R2VideoUploadResponse = {
   success?: boolean;
-  uploadUrl?: string;
   objectKey?: string;
   error?: string;
 };
@@ -971,39 +970,23 @@ export default function Home() {
       throw new Error("视频文件为空，请重新上传");
     }
 
-    const presignResponse = await fetch("/api/r2/video-upload", {
+    const file = new File([blob], fileName || "video.mp4", { type: payload.mimeType });
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const uploadResponse = await fetch("/api/r2/video-upload", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        fileName: fileName || "video.mp4",
-        contentType: payload.mimeType,
-        size: blob.size,
-      }),
+      body: formData,
     });
-    const presignData = await presignResponse.json().catch(() => ({})) as R2VideoUploadResponse;
+    const uploadData = await uploadResponse.json().catch(() => ({})) as R2VideoUploadResponse;
 
-    if (!presignResponse.ok || !presignData.uploadUrl || !presignData.objectKey) {
-      throw new Error(presignData.error || `R2 上传地址生成失败 (状态码 ${presignResponse.status})`);
-    }
-
-    const uploadResponse = await fetch(presignData.uploadUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Type": payload.mimeType,
-      },
-      body: blob,
-    });
-
-    if (!uploadResponse.ok) {
-      const errBody = await uploadResponse.text().catch(() => "");
-      throw new Error(`视频上传 R2 失败 (状态码 ${uploadResponse.status}): ${errBody.slice(0, 120)}`);
+    if (!uploadResponse.ok || !uploadData.objectKey) {
+      throw new Error(uploadData.error || `R2 上传失败 (状态码 ${uploadResponse.status})`);
     }
 
     return {
       mimeType: payload.mimeType,
-      objectKey: presignData.objectKey,
+      objectKey: uploadData.objectKey,
     };
   };
 

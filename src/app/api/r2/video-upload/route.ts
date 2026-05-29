@@ -1,12 +1,6 @@
 import { NextResponse } from "next/server";
-import { createPresignedR2Upload } from "@/app/lib/server/r2";
+import { uploadTempVideoToR2 } from "@/app/lib/server/r2";
 import { sessionErrorResponse } from "@/app/lib/server/app-session";
-
-type VideoUploadRequestBody = {
-  fileName?: string;
-  contentType?: string;
-  size?: number;
-};
 
 const MAX_VIDEO_UPLOAD_BYTES = 500 * 1024 * 1024;
 
@@ -15,9 +9,17 @@ export async function POST(request: Request) {
     const sessionError = await sessionErrorResponse(request);
     if (sessionError) return sessionError;
 
-    const body = (await request.json()) as VideoUploadRequestBody;
-    const contentType = body.contentType || "";
+    const formData = await request.formData();
+    const file = formData.get("file");
 
+    if (!(file instanceof File)) {
+      return NextResponse.json(
+        { success: false, error: "缺少视频文件" },
+        { status: 400 }
+      );
+    }
+
+    const contentType = file.type || "video/mp4";
     if (!contentType.startsWith("video/")) {
       return NextResponse.json(
         { success: false, error: "仅支持上传 video/* 类型文件" },
@@ -25,24 +27,31 @@ export async function POST(request: Request) {
       );
     }
 
-    if (typeof body.size === "number" && body.size > MAX_VIDEO_UPLOAD_BYTES) {
+    if (file.size <= 0) {
+      return NextResponse.json(
+        { success: false, error: "视频文件为空，请重新上传" },
+        { status: 400 }
+      );
+    }
+
+    if (file.size > MAX_VIDEO_UPLOAD_BYTES) {
       return NextResponse.json(
         { success: false, error: "视频文件超过 500MB，请压缩后再上传解析" },
         { status: 413 }
       );
     }
 
-    const upload = await createPresignedR2Upload({
-      fileName: body.fileName || "video.mp4",
+    const upload = await uploadTempVideoToR2({
+      fileName: file.name || "video.mp4",
       contentType,
+      body: new Uint8Array(await file.arrayBuffer()),
+      size: file.size,
     });
-    const { uploadUrl, objectKey, expiresIn } = upload;
+    const { objectKey } = upload;
 
     return NextResponse.json({
       success: true,
-      uploadUrl,
       objectKey,
-      expiresIn,
     });
   } catch (error) {
     return NextResponse.json(

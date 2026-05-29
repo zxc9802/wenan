@@ -10,7 +10,8 @@ test("video parser posts uploaded local video to the server-side Gemini video ro
   assert.match(pageSource, /mimeType/);
   assert.match(pageSource, /objectKey/);
   assert.match(pageSource, /fetch\("\/api\/r2\/video-upload"/);
-  assert.match(pageSource, /uploadUrl/);
+  assert.match(pageSource, /FormData/);
+  assert.doesNotMatch(pageSource, /presignData\.uploadUrl/);
 });
 
 test("video upload status is distinct from parsed-and-filled status", () => {
@@ -60,14 +61,15 @@ test("video parser rejects incomplete model output instead of filling local defa
   assert.doesNotMatch(pageSource, /content\.content \|\| `别再自嗨了/);
 });
 
-test("R2 upload route presigns temporary browser uploads", () => {
+test("R2 upload route stores browser uploads server-side instead of returning browser PUT URLs", () => {
   const uploadRouteUrl = new URL("../../r2/video-upload/route.ts", import.meta.url);
   assert.equal(existsSync(uploadRouteUrl), true, "R2 upload route should exist");
 
   const uploadRouteSource = readFileSync(uploadRouteUrl, "utf8");
-  assert.match(uploadRouteSource, /createPresignedR2Upload/);
-  assert.match(uploadRouteSource, /uploadUrl/);
+  assert.match(uploadRouteSource, /request\.formData\(\)/);
+  assert.match(uploadRouteSource, /uploadTempVideoToR2/);
   assert.match(uploadRouteSource, /objectKey/);
+  assert.doesNotMatch(uploadRouteSource, /uploadUrl/);
 });
 
 test("R2 client avoids automatic checksum query params for browser PUT CORS", () => {

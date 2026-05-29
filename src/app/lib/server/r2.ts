@@ -110,6 +110,31 @@ export async function createPresignedR2Upload(input: {
   };
 }
 
+export async function uploadTempVideoToR2(input: {
+  fileName: string;
+  contentType: string;
+  body: Uint8Array;
+  size: number;
+}) {
+  if (!input.contentType.startsWith("video/")) {
+    throw new Error("仅支持上传 video/* 类型文件");
+  }
+
+  const config = requireR2Config();
+  const client = createR2Client(config);
+  const objectKey = createTempVideoObjectKey(input.fileName, config);
+
+  await client.send(new PutObjectCommand({
+    Bucket: config.bucket,
+    Key: objectKey,
+    Body: input.body,
+    ContentType: input.contentType,
+    ContentLength: input.size,
+  }));
+
+  return { objectKey };
+}
+
 export async function createPresignedR2ReadUrl(objectKey: string) {
   const config = requireR2Config();
   assertTempObjectKey(objectKey, config);
