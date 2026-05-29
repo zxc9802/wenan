@@ -11,10 +11,18 @@ test("video parser posts uploaded local video to the server-side Gemini video ro
   assert.match(pageSource, /base64Data/);
 });
 
+test("video upload status is distinct from parsed-and-filled status", () => {
+  assert.equal(pageSource.includes("已成功装载待拆解视频源"), false);
+  assert.match(pageSource, /videoParseStatus/);
+  assert.match(pageSource, /视频已装载，点击下方按钮开始解析/);
+  assert.match(pageSource, /AI 已解析并回填右侧字段/);
+});
+
 test("Gemini video route tries flash three times before pro fallback", () => {
   assert.equal(existsSync(routeUrl), true, "video route should exist");
 
   const routeSource = readFileSync(routeUrl, "utf8");
+  assert.match(routeSource, /GEMINI_VIDEO_API_KEY/);
   assert.match(routeSource, /GEMINI_VIDEO_MODEL/);
   assert.match(routeSource, /gemini-3\.5-flash/);
   assert.match(routeSource, /GEMINI_VIDEO_FALLBACK_MODEL/);

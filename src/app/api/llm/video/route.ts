@@ -43,7 +43,7 @@ function buildGenerateContentUrl(baseUrl: string, model: string) {
 
 function getGeminiVideoConfig() {
   return {
-    apiKey: process.env.GEMINI_API_KEY || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "",
+    apiKey: process.env.GEMINI_VIDEO_API_KEY || process.env.GEMINI_API_KEY || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "",
     baseUrl: process.env.GEMINI_VIDEO_API_BASE_URL || "https://generativelanguage.googleapis.com/v1beta",
     primaryModel: process.env.GEMINI_VIDEO_MODEL || "gemini-3.5-flash",
     fallbackModel: process.env.GEMINI_VIDEO_FALLBACK_MODEL || "gemini-3.1-pro",

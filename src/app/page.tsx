@@ -124,6 +124,7 @@ interface DeconstructionResult {
 }
 
 type LlmProvider = "gemini" | "deepseek";
+type VideoParseStatus = "idle" | "uploaded" | "parsing" | "parsed";
 
 interface BatchArticleResult {
   id: string;
@@ -462,6 +463,7 @@ export default function Home() {
   const [isAddingMaterial, setIsAddingMaterial] = useState(false);
   // 豆包视频解构专属
   const [matVideoFile, setMatVideoFile] = useState("");
+  const [videoParseStatus, setVideoParseStatus] = useState<VideoParseStatus>("idle");
   const [matVideoVisualHook, setMatVideoVisualHook] = useState("");
   const [matVideoEmotionCurve, setMatVideoEmotionCurve] = useState("");
   const [matVideoConflictFriction, setMatVideoConflictFriction] = useState("");
@@ -797,6 +799,7 @@ export default function Home() {
     setMatContent("");
     setMatReason("");
     setMatVideoFile("");
+    setVideoParseStatus("idle");
     setMatVideoVisualHook("");
     setMatVideoEmotionCurve("");
     setMatVideoConflictFriction("");
@@ -960,6 +963,7 @@ export default function Home() {
     }
 
     setIsParsingVideo(true);
+    setVideoParseStatus("parsing");
     setParsingVideoStep("正在检测并初始化多模态解析引擎...");
 
     // 延时加载以展示逼真的AI过程
@@ -1069,6 +1073,7 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
           setMatVideoGoldenFormula(content.goldenFormula || "句式「业务不X，引入再先进的Y也只是加速折腾」");
           setMatVideoConversionHook(content.conversionHook || "评论区二收，回复“转型”即可免费领《老板AI转型SOP避坑表》");
 
+          setVideoParseStatus("parsed");
           showToast(`已成功调用 Gemini 视频模型【${usedModel}】为您解析视频！`, "success");
         } else {
           const errBody = await response.text();
@@ -1077,6 +1082,7 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
       }
     } catch (err) {
       console.error("Video parse error:", err);
+      setVideoParseStatus(matVideoFile ? "uploaded" : "idle");
       showToast(`大模型解析发生错误: ${getErrorMessage(err)}`, "error");
     } finally {
       setIsParsingVideo(false);
@@ -3055,14 +3061,24 @@ ${ctaText}`;
                               <video src={matVideoFile} controls className="w-full max-h-28 rounded-lg object-cover bg-slate-950" />
                               <button
                                 type="button"
-                                onClick={() => setMatVideoFile("")}
+                                onClick={() => {
+                                  setMatVideoFile("");
+                                  setUploadedVideoName("");
+                                  setVideoParseStatus("idle");
+                                }}
                                 className="absolute top-4 right-4 p-1.5 bg-rose-500 hover:bg-rose-600 text-white rounded-full transition-all shadow-md cursor-pointer flex items-center justify-center"
                               >
                                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
                                 </svg>
                               </button>
-                              <span className="text-[9px] text-slate-400 font-bold mt-1.5">已成功装载待拆解视频源</span>
+                              <span className={`text-[9px] font-bold mt-1.5 ${videoParseStatus === "parsed" ? "text-emerald-600" : "text-slate-400"}`}>
+                                {videoParseStatus === "parsed"
+                                  ? "AI 已解析并回填右侧字段"
+                                  : videoParseStatus === "parsing"
+                                    ? "AI 正在解析视频内容，请稍候"
+                                    : "视频已装载，点击下方按钮开始解析"}
+                              </span>
 
                               <button
                                 type="button"
@@ -3079,7 +3095,7 @@ ${ctaText}`;
                                     AI 正在深度解析中...
                                   </>
                                 ) : (
-                                  <span>AI 解析视频并回填右侧字段</span>
+                                  <span>{videoParseStatus === "parsed" ? "重新解析视频并覆盖右侧字段" : "AI 解析视频并回填右侧字段"}</span>
                                 )}
                               </button>
 
@@ -3113,6 +3129,7 @@ ${ctaText}`;
                                     reader.onloadend = () => {
                                       setMatVideoFile(reader.result as string);
                                       setUploadedVideoName(file.name || "video.mp4");
+                                      setVideoParseStatus("uploaded");
                                       showToast(`已成功装载待拆解视频: ${file.name}`, "success");
                                     };
                                     reader.readAsDataURL(file);
