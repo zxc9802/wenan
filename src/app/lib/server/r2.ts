@@ -63,6 +63,7 @@ function createR2Client(config: R2Config) {
     region: config.region,
     endpoint: config.endpoint,
     forcePathStyle: true,
+    requestChecksumCalculation: "WHEN_REQUIRED",
     credentials: {
       accessKeyId: config.accessKeyId,
       secretAccessKey: config.secretAccessKey,

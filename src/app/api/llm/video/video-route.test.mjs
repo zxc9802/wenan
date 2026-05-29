@@ -69,3 +69,8 @@ test("R2 upload route presigns temporary browser uploads", () => {
   assert.match(uploadRouteSource, /uploadUrl/);
   assert.match(uploadRouteSource, /objectKey/);
 });
+
+test("R2 client avoids automatic checksum query params for browser PUT CORS", () => {
+  const r2Source = readFileSync(new URL("../../../lib/server/r2.ts", import.meta.url), "utf8");
+  assert.match(r2Source, /requestChecksumCalculation:\s*"WHEN_REQUIRED"/);
+});
