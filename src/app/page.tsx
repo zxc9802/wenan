@@ -899,26 +899,6 @@ export default function Home() {
 
   const isGeminiVideoModel = () => /gmini|gemini/i.test(`${apiModel} ${apiBaseUrl}`);
 
-  const buildGeminiGenerateContentUrl = () => {
-    let baseUrl = (apiBaseUrl || "https://generativelanguage.googleapis.com/v1beta").trim().replace(/\/+$/, "");
-    baseUrl = baseUrl.replace(/\/openai\/?$/, "");
-
-    let url: string;
-    if (/\/models\/[^/]+:generateContent(?:\?|$)/.test(baseUrl)) {
-      url = baseUrl;
-    } else if (/\/models\/[^/]+$/.test(baseUrl)) {
-      url = `${baseUrl}:generateContent`;
-    } else {
-      if (!/\/v\d+(?:beta|alpha)?$/.test(baseUrl)) {
-        baseUrl = `${baseUrl}/v1beta`;
-      }
-      const modelName = (apiModel || "gemini-2.5-flash").replace(/^models\//, "");
-      url = `${baseUrl}/models/${encodeURIComponent(modelName)}:generateContent`;
-    }
-
-    return url;
-  };
-
   const extractLLMJsonText = (rawText: string) => {
     const trimmed = rawText.trim();
     const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
@@ -969,6 +949,9 @@ export default function Home() {
 
   const readChatCompletionProvider = (data: { _provider?: LlmProvider }, fallback: LlmProvider) =>
     data._provider || fallback;
+
+  const readChatCompletionModel = (data: { _model?: string }) =>
+    data._model || "Gemini 视频模型";
 
   const handleParseVideoWithLLM = async () => {
     if (!matVideoFile) {
@@ -1029,7 +1012,7 @@ export default function Home() {
       if (transcriptText) {
         setParsingVideoStep(`ASR 识别成功！已提取 ${transcriptText.slice(0, 20)}... 正在调用【${apiModel}】分析文案结构...`);
       } else {
-        setParsingVideoStep(`正在调用您设置的大模型【${apiModel || "标准模型"}】结合视频名《${uploadedVideoName || "高手视频"}》进行骨架 deconstruct...`);
+        setParsingVideoStep(`正在将本地视频交给 Gemini【gemini-3.5-flash】多模态解析，连续失败 3 次后自动切换 gemini-3.1-pro...`);
       }
       await delay(1000);
 
@@ -1055,46 +1038,23 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
 }`;
 
         const videoPayload = getDataUrlPayload(matVideoFile);
-        const response = hasClientLlmConfig() && isGeminiVideoModel()
-          ? await fetch(buildGeminiGenerateContentUrl(), {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-goog-api-key": apiKey
-            },
-            body: JSON.stringify({
-              contents: [
-                {
-                  role: "user",
-                  parts: [
-                    {
-                      inline_data: {
-                        mime_type: videoPayload.mimeType,
-                        data: videoPayload.base64Data
-                      }
-                    },
-                    {
-                      text: `${systemPrompt}\n\n请直接基于这个视频本体（画面、声音、字幕、节奏）进行深层结构剖析，返回严格 JSON。`
-                    }
-                  ]
-                }
-              ],
-              generationConfig: {
-                temperature: 0.7,
-                responseMimeType: "application/json"
-              }
-            })
+        const response = await fetch("/api/llm/video", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            mimeType: videoPayload.mimeType,
+            base64Data: videoPayload.base64Data,
+            prompt: `${systemPrompt}\n\n请直接基于这个视频本体（画面、声音、字幕、节奏）进行深层结构剖析，返回严格 JSON。`,
+            temperature: 0.7
           })
-          : await requestChatCompletion([
-            { role: "system", content: systemPrompt },
-            { role: "user", content: `请针对已上传视频《${uploadedVideoName}》及音轨文案进行深层结构剖析。` }
-          ], 0.7);
+        });
 
         if (response.ok) {
           const resData = await response.json();
-          const rawContent = hasClientLlmConfig() && isGeminiVideoModel()
-            ? (resData as { candidates?: { content?: { parts?: { text?: string }[] } }[] }).candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || ""
-            : readChatCompletionContent(resData as { choices?: { message?: { content?: string } }[] });
+          const rawContent = readChatCompletionContent(resData as { choices?: { message?: { content?: string } }[] });
+          const usedModel = readChatCompletionModel(resData as { _model?: string });
           const content = JSON.parse(extractLLMJsonText(rawContent));
 
           setMatAuthor(content.author || "老黄·AI提效实干家");
@@ -1109,7 +1069,7 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
           setMatVideoGoldenFormula(content.goldenFormula || "句式「业务不X，引入再先进的Y也只是加速折腾」");
           setMatVideoConversionHook(content.conversionHook || "评论区二收，回复“转型”即可免费领《老板AI转型SOP避坑表》");
 
-          showToast(`已成功调用大模型【${apiModel}】为您解析视频！`, "success");
+          showToast(`已成功调用 Gemini 视频模型【${usedModel}】为您解析视频！`, "success");
         } else {
           const errBody = await response.text();
           throw new Error(`API 响应失败 (状态码 ${response.status}): ${errBody.slice(0, 100)}`);
