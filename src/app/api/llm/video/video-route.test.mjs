@@ -23,11 +23,24 @@ test("Gemini video route tries flash three times before pro fallback", () => {
 
   const routeSource = readFileSync(routeUrl, "utf8");
   assert.match(routeSource, /GEMINI_VIDEO_API_KEY/);
+  assert.match(routeSource, /GEMINI_VIDEO_API_BASE_URL \|\| process\.env\.GEMINI_API_BASE_URL/);
   assert.match(routeSource, /GEMINI_VIDEO_MODEL/);
+  assert.match(routeSource, /GEMINI_VIDEO_MODEL \|\| process\.env\.GEMINI_MODEL/);
   assert.match(routeSource, /gemini-3\.5-flash/);
   assert.match(routeSource, /GEMINI_VIDEO_FALLBACK_MODEL/);
+  assert.match(routeSource, /GEMINI_VIDEO_FALLBACK_MODEL \|\| process\.env\.GEMINI_FALLBACK_MODEL/);
   assert.match(routeSource, /gemini-3\.1-pro/);
   assert.match(routeSource, /FLASH_ATTEMPTS\s*=\s*3/);
   assert.match(routeSource, /for \(let attempt = 1; attempt <= FLASH_ATTEMPTS; attempt \+= 1\)/);
-  assert.match(routeSource, /models\/\$\{encodeURIComponent\(model\)\}:generateContent/);
+});
+
+test("Gemini video route supports OpenAI-compatible video chat completions", () => {
+  const routeSource = readFileSync(routeUrl, "utf8");
+  assert.match(routeSource, /type GeminiVideoProtocol = "google" \| "openai"/);
+  assert.match(routeSource, /GEMINI_VIDEO_API_PROTOCOL/);
+  assert.match(routeSource, /buildOpenAiChatCompletionsUrl/);
+  assert.match(routeSource, /chat\/completions/);
+  assert.match(routeSource, /Authorization: `Bearer \$\{config\.apiKey\}`/);
+  assert.match(routeSource, /type: "video_url"/);
+  assert.match(routeSource, /url: `data:\$\{body\.mimeType\};base64,\$\{body\.base64Data\}`/);
 });

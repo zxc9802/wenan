@@ -16,6 +16,16 @@ type GeminiGenerateContentResponse = {
   }[];
 };
 
+type OpenAiChatCompletionResponse = {
+  choices?: {
+    message?: {
+      content?: string;
+    };
+  }[];
+};
+
+type GeminiVideoProtocol = "google" | "openai";
+
 const FLASH_ATTEMPTS = 3;
 
 function cleanBaseUrl(value: string) {
@@ -41,12 +51,29 @@ function buildGenerateContentUrl(baseUrl: string, model: string) {
   return `${normalized}/models/${encodeURIComponent(model)}:generateContent`;
 }
 
+function buildOpenAiChatCompletionsUrl(baseUrl: string) {
+  const normalized = cleanBaseUrl(baseUrl);
+  return /\/chat\/completions$/.test(normalized) ? normalized : `${normalized}/chat/completions`;
+}
+
+function inferGeminiVideoProtocol(baseUrl: string): GeminiVideoProtocol {
+  const normalized = baseUrl.toLowerCase();
+  if (normalized.includes("generativelanguage.googleapis.com") && !normalized.includes("/openai")) {
+    return "google";
+  }
+
+  return "openai";
+}
+
 function getGeminiVideoConfig() {
+  const baseUrl = process.env.GEMINI_VIDEO_API_BASE_URL || process.env.GEMINI_API_BASE_URL || "https://generativelanguage.googleapis.com/v1beta";
+
   return {
     apiKey: process.env.GEMINI_VIDEO_API_KEY || process.env.GEMINI_API_KEY || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "",
-    baseUrl: process.env.GEMINI_VIDEO_API_BASE_URL || "https://generativelanguage.googleapis.com/v1beta",
-    primaryModel: process.env.GEMINI_VIDEO_MODEL || "gemini-3.5-flash",
-    fallbackModel: process.env.GEMINI_VIDEO_FALLBACK_MODEL || "gemini-3.1-pro",
+    baseUrl,
+    primaryModel: process.env.GEMINI_VIDEO_MODEL || process.env.GEMINI_MODEL || "gemini-3.5-flash",
+    fallbackModel: process.env.GEMINI_VIDEO_FALLBACK_MODEL || process.env.GEMINI_FALLBACK_MODEL || "gemini-3.1-pro",
+    protocol: (process.env.GEMINI_VIDEO_API_PROTOCOL as GeminiVideoProtocol | undefined) || inferGeminiVideoProtocol(baseUrl),
   };
 }
 
@@ -62,9 +89,7 @@ function errorDetail(error: unknown) {
   return typeof error === "object" && error && "detail" in error ? (error as { detail?: unknown }).detail : undefined;
 }
 
-async function callGeminiVideo(body: Required<VideoParseRequestBody>, model: string) {
-  const config = getGeminiVideoConfig();
-
+async function callGoogleGeminiVideo(body: Required<VideoParseRequestBody>, model: string, config: ReturnType<typeof getGeminiVideoConfig>) {
   const upstream = await fetch(buildGenerateContentUrl(config.baseUrl, model), {
     method: "POST",
     headers: {
@@ -110,6 +135,61 @@ async function callGeminiVideo(body: Required<VideoParseRequestBody>, model: str
   }
 
   return content;
+}
+
+async function callOpenAiCompatibleVideo(body: Required<VideoParseRequestBody>, model: string, config: ReturnType<typeof getGeminiVideoConfig>) {
+  const upstream = await fetch(buildOpenAiChatCompletionsUrl(config.baseUrl), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: body.prompt,
+            },
+            {
+              type: "video_url",
+              video_url: {
+                url: `data:${body.mimeType};base64,${body.base64Data}`,
+              },
+            },
+          ],
+        },
+      ],
+      temperature: body.temperature,
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  const data = await upstream.json().catch(async () => ({ raw: await upstream.text().catch(() => "") }));
+  if (!upstream.ok) {
+    const error = new Error(`${model} OpenAI 兼容视频解析调用失败`);
+    Object.assign(error, { status: upstream.status, detail: data });
+    throw error;
+  }
+
+  const content = (data as OpenAiChatCompletionResponse).choices?.[0]?.message?.content || "";
+  if (!content.trim()) {
+    const error = new Error(`${model} 未返回可解析内容`);
+    Object.assign(error, { status: 502, detail: data });
+    throw error;
+  }
+
+  return content;
+}
+
+async function callGeminiVideo(body: Required<VideoParseRequestBody>, model: string) {
+  const config = getGeminiVideoConfig();
+  return config.protocol === "openai"
+    ? callOpenAiCompatibleVideo(body, model, config)
+    : callGoogleGeminiVideo(body, model, config);
 }
 
 export async function POST(request: Request) {
