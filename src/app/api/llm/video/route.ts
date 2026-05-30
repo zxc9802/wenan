@@ -37,9 +37,37 @@ type OpenAiChatCompletionResponse = {
 };
 
 type GeminiVideoProtocol = "google" | "openai";
+type VideoParseJobStatus = "queued" | "running" | "succeeded" | "failed";
+type VideoParseAttempt = {
+  provider: "gemini";
+  model: string;
+  attempt: number;
+  status?: number;
+  error: string;
+  detail?: unknown;
+};
+type VideoParseCompletionPayload = {
+  choices: { message: { content: string } }[];
+  _provider: "gemini";
+  _model: string;
+  _fallbackUsed: boolean;
+  _attempts: VideoParseAttempt[];
+};
+type VideoParseJob = {
+  status: VideoParseJobStatus;
+  createdAt: number;
+  updatedAt: number;
+  attempts: VideoParseAttempt[];
+  result?: VideoParseCompletionPayload;
+  error?: string;
+  detail?: unknown;
+};
 
 const FLASH_ATTEMPTS = 3;
 const GEMINI_VIDEO_TIMEOUT_MS = Number.parseInt(process.env.GEMINI_VIDEO_TIMEOUT_MS || "300000", 10) || 300000;
+const VIDEO_PARSE_JOB_TTL_MS = 30 * 60 * 1000;
+const MAX_VIDEO_PARSE_JOBS = 50;
+const videoParseJobs = ((globalThis as typeof globalThis & { __copywritingVideoParseJobs?: Map<string, VideoParseJob> }).__copywritingVideoParseJobs ||= new Map<string, VideoParseJob>());
 
 function cleanBaseUrl(value: string) {
   return value.trim().replace(/\/+$/, "");
@@ -330,6 +358,171 @@ async function callGeminiVideo(body: ResolvedVideoParseRequestBody, model: strin
     : callGoogleGeminiVideo(body, model, config);
 }
 
+function cleanupExpiredVideoParseJobs() {
+  const now = Date.now();
+  for (const [jobId, job] of videoParseJobs.entries()) {
+    if (now - job.updatedAt > VIDEO_PARSE_JOB_TTL_MS) {
+      videoParseJobs.delete(jobId);
+    }
+  }
+
+  if (videoParseJobs.size <= MAX_VIDEO_PARSE_JOBS) return;
+
+  const sortedJobs = [...videoParseJobs.entries()].sort(([, left], [, right]) => left.updatedAt - right.updatedAt);
+  for (const [jobId] of sortedJobs.slice(0, videoParseJobs.size - MAX_VIDEO_PARSE_JOBS)) {
+    videoParseJobs.delete(jobId);
+  }
+}
+
+function updateVideoParseJob(jobId: string, patch: Partial<VideoParseJob>) {
+  const job = videoParseJobs.get(jobId);
+  if (!job) return;
+  videoParseJobs.set(jobId, {
+    ...job,
+    ...patch,
+    updatedAt: Date.now(),
+  });
+}
+
+function serializeVideoParseJob(jobId: string, job: VideoParseJob) {
+  if (job.status === "succeeded" && job.result) {
+    return {
+      success: true,
+      jobId,
+      status: job.status,
+      ...job.result,
+    };
+  }
+
+  return {
+    success: job.status !== "failed",
+    jobId,
+    status: job.status,
+    attempts: job.attempts,
+    error: job.error,
+    detail: job.detail,
+  };
+}
+
+async function runGeminiVideoParse(
+  requestBody: ResolvedVideoParseRequestBody,
+  config: ReturnType<typeof getGeminiVideoConfig>,
+  onAttemptsChange?: (attempts: VideoParseAttempt[]) => void
+): Promise<VideoParseCompletionPayload> {
+  const attempts: VideoParseAttempt[] = [];
+  const recordAttempt = (attempt: VideoParseAttempt) => {
+    attempts.push(attempt);
+    onAttemptsChange?.([...attempts]);
+  };
+
+  for (let attempt = 1; attempt <= FLASH_ATTEMPTS; attempt += 1) {
+    try {
+      const content = await callGeminiVideo(requestBody, config.primaryModel);
+      return {
+        choices: [{ message: { content } }],
+        _provider: "gemini",
+        _model: config.primaryModel,
+        _fallbackUsed: attempts.length > 0,
+        _attempts: attempts,
+      };
+    } catch (error) {
+      recordAttempt({
+        provider: "gemini",
+        model: config.primaryModel,
+        attempt,
+        status: errorStatus(error),
+        error: error instanceof Error ? error.message : String(error),
+        detail: errorDetail(error),
+      });
+    }
+  }
+
+  try {
+    const content = await callGeminiVideo(requestBody, config.fallbackModel);
+    return {
+      choices: [{ message: { content } }],
+      _provider: "gemini",
+      _model: config.fallbackModel,
+      _fallbackUsed: true,
+      _attempts: attempts,
+    };
+  } catch (error) {
+    recordAttempt({
+      provider: "gemini",
+      model: config.fallbackModel,
+      attempt: 1,
+      status: errorStatus(error),
+      error: error instanceof Error ? error.message : String(error),
+      detail: errorDetail(error),
+    });
+  }
+
+  throw createHttpError(
+    "Gemini 视频解析失败，flash 重试 3 次且 pro 备用模型也未能接管",
+    attempts.find((attempt) => attempt.status && attempt.status >= 500)?.status || 500,
+    { attempts }
+  );
+}
+
+async function processVideoParseJob(
+  jobId: string,
+  requestBody: ResolvedVideoParseRequestBody,
+  config: ReturnType<typeof getGeminiVideoConfig>
+) {
+  updateVideoParseJob(jobId, { status: "running" });
+
+  try {
+    const result = await runGeminiVideoParse(requestBody, config, (attempts) => {
+      updateVideoParseJob(jobId, { attempts });
+    });
+    updateVideoParseJob(jobId, { status: "succeeded", result, attempts: result._attempts });
+  } catch (error) {
+    const detail = errorDetail(error);
+    const attempts = typeof detail === "object" && detail && "attempts" in detail
+      ? (detail as { attempts?: VideoParseAttempt[] }).attempts || []
+      : videoParseJobs.get(jobId)?.attempts || [];
+
+    updateVideoParseJob(jobId, {
+      status: "failed",
+      attempts,
+      error: error instanceof Error ? error.message : String(error),
+      detail,
+    });
+  }
+}
+
+export async function GET(request: Request) {
+  try {
+    const sessionError = await sessionErrorResponse(request);
+    if (sessionError) return sessionError;
+
+    cleanupExpiredVideoParseJobs();
+    const jobId = new URL(request.url).searchParams.get("jobId")?.trim() || "";
+    if (!jobId) {
+      return NextResponse.json(
+        { success: false, error: "缺少视频解析任务 jobId" },
+        { status: 400 }
+      );
+    }
+
+    const job = videoParseJobs.get(jobId);
+    if (!job) {
+      return NextResponse.json(
+        { success: false, error: "视频解析任务不存在或已过期" },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json(serializeVideoParseJob(jobId, job));
+  } catch (error) {
+    const status = errorStatus(error);
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : String(error), detail: errorDetail(error) },
+      { status }
+    );
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const sessionError = await sessionErrorResponse(request);
@@ -344,53 +537,19 @@ export async function POST(request: Request) {
     }
 
     const requestBody = await parseVideoRequest(request);
-    const attempts = [];
-
-    for (let attempt = 1; attempt <= FLASH_ATTEMPTS; attempt += 1) {
-      try {
-        const content = await callGeminiVideo(requestBody, config.primaryModel);
-        return NextResponse.json({
-          choices: [{ message: { content } }],
-          _provider: "gemini",
-          _model: config.primaryModel,
-          _fallbackUsed: attempts.length > 0,
-          _attempts: attempts,
-        });
-      } catch (error) {
-        attempts.push({
-          provider: "gemini",
-          model: config.primaryModel,
-          attempt,
-          status: errorStatus(error),
-          error: error instanceof Error ? error.message : String(error),
-          detail: errorDetail(error),
-        });
-      }
-    }
-
-    try {
-      const content = await callGeminiVideo(requestBody, config.fallbackModel);
-      return NextResponse.json({
-        choices: [{ message: { content } }],
-        _provider: "gemini",
-        _model: config.fallbackModel,
-        _fallbackUsed: true,
-        _attempts: attempts,
-      });
-    } catch (error) {
-      attempts.push({
-        provider: "gemini",
-        model: config.fallbackModel,
-        attempt: 1,
-        status: errorStatus(error),
-        error: error instanceof Error ? error.message : String(error),
-        detail: errorDetail(error),
-      });
-    }
+    cleanupExpiredVideoParseJobs();
+    const jobId = crypto.randomUUID();
+    videoParseJobs.set(jobId, {
+      status: "queued",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      attempts: [],
+    });
+    void processVideoParseJob(jobId, requestBody, config);
 
     return NextResponse.json(
-      { success: false, error: "Gemini 视频解析失败，flash 重试 3 次且 pro 备用模型也未能接管", attempts },
-      { status: attempts.find((attempt) => attempt.status && attempt.status >= 500)?.status || 500 }
+      { success: true, jobId, status: "queued" },
+      { status: 202 }
     );
   } catch (error) {
     const status = errorStatus(error);

@@ -16,6 +16,13 @@ test("video parser posts uploaded local video to the server-side Gemini video ro
   assert.doesNotMatch(pageSource, /presignData\.uploadUrl/);
 });
 
+test("video parser polls a background parse job instead of waiting on the initial request", () => {
+  assert.match(pageSource, /pollVideoParseJob/);
+  assert.match(pageSource, /jobId/);
+  assert.match(pageSource, /status === "succeeded"/);
+  assert.match(pageSource, /\/api\/llm\/video\?\$\{params\.toString\(\)\}/);
+});
+
 test("video upload status is distinct from parsed-and-filled status", () => {
   assert.equal(pageSource.includes("已成功装载待拆解视频源"), false);
   assert.match(pageSource, /videoParseStatus/);
@@ -57,6 +64,15 @@ test("Gemini video route accepts multipart uploads and sends native Gemini inlin
   assert.match(routeSource, /file\.arrayBuffer\(\)/);
   assert.match(routeSource, /base64Data/);
   assert.match(routeSource, /inline_data/);
+});
+
+test("Gemini video route creates background jobs and exposes polling status", () => {
+  const routeSource = readFileSync(routeUrl, "utf8");
+  assert.match(routeSource, /type VideoParseJobStatus = "queued" \| "running" \| "succeeded" \| "failed"/);
+  assert.match(routeSource, /const videoParseJobs =/);
+  assert.match(routeSource, /processVideoParseJob/);
+  assert.match(routeSource, /NextResponse\.json\(\s*\{\s*success: true,\s*jobId,\s*status: "queued"/s);
+  assert.match(routeSource, /export async function GET\(request: Request\)/);
 });
 
 test("Gemini video route defaults shanbaob video calls to native Gemini protocol", () => {

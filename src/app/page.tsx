@@ -140,6 +140,15 @@ type VideoParseContent = {
   conversionHook: string;
 };
 
+type VideoParseJobResponse = {
+  success?: boolean;
+  jobId?: string;
+  status?: "queued" | "running" | "succeeded" | "failed";
+  choices?: { message?: { content?: string } }[];
+  _model?: string;
+  error?: string;
+};
+
 interface BatchArticleResult {
   id: string;
   title: string;
@@ -1020,6 +1029,37 @@ export default function Home() {
   const readChatCompletionModel = (data: { _model?: string }) =>
     data._model || "Gemini 视频模型";
 
+  const pollVideoParseJob = async (jobId: string) => {
+    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+    for (let attempt = 1; attempt <= 160; attempt += 1) {
+      await delay(3000);
+      const params = new URLSearchParams({ jobId });
+      const statusResponse = await fetch(`/api/llm/video?${params.toString()}`, {
+        cache: "no-store",
+      });
+      const statusData = await statusResponse.json().catch(() => ({})) as VideoParseJobResponse;
+
+      if (!statusResponse.ok) {
+        throw new Error(statusData.error || `视频解析状态查询失败 (状态码 ${statusResponse.status})`);
+      }
+
+      if (statusData.status === "succeeded") {
+        return statusData;
+      }
+
+      if (statusData.status === "failed") {
+        throw new Error(statusData.error || "视频解析任务失败，请重新上传或压缩视频后再试");
+      }
+
+      if (attempt % 4 === 0) {
+        setParsingVideoStep(`Gemini 正在后台解析视频，本页持续等待中... 已轮询 ${attempt} 次`);
+      }
+    }
+
+    throw new Error("视频解析任务等待超时，请稍后重新点击解析");
+  };
+
   const handleParseVideoWithLLM = async () => {
     if (!matVideoFile) {
       showToast("请先选择或拖入高手参考视频！", "error");
@@ -1115,7 +1155,13 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
         });
 
         if (response.ok) {
-          const resData = await response.json();
+          const initialData = await response.json().catch(() => ({})) as VideoParseJobResponse;
+          if (!initialData.jobId) {
+            throw new Error("视频解析任务创建失败：服务端未返回 jobId");
+          }
+
+          setParsingVideoStep("视频解析任务已创建，正在后台调用 Gemini，页面将自动轮询结果...");
+          const resData = await pollVideoParseJob(initialData.jobId);
           const rawContent = readChatCompletionContent(resData as { choices?: { message?: { content?: string } }[] });
           const usedModel = readChatCompletionModel(resData as { _model?: string });
           const content = validateVideoParseContent(JSON.parse(extractLLMJsonText(rawContent)));
