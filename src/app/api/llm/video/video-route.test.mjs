@@ -23,6 +23,18 @@ test("video parser polls a background parse job instead of waiting on the initia
   assert.match(pageSource, /\/api\/llm\/video\?\$\{params\.toString\(\)\}/);
 });
 
+test("video parser asks for a verbatim transcript instead of rewritten copy", () => {
+  assert.match(pageSource, /逐字转写原视频口播/);
+  assert.match(pageSource, /清楚听到的原话必须逐字保留/);
+  assert.match(pageSource, /听不清的小片段可以结合上下文补成自然完整句子/);
+  assert.match(pageSource, /不得借补全名义总结、改写、扩写清楚听到的内容/);
+  assert.doesNotMatch(pageSource, /content": "完全复原的高手原文字句[\s\S]*比如：/);
+});
+
+test("video parser uses low temperature for transcript extraction", () => {
+  assert.match(pageSource, /createVideoParseFormData\(matVideoFile, uploadedVideoName \|\| "video\.mp4", prompt, 0\.1\)/);
+});
+
 test("video upload status is distinct from parsed-and-filled status", () => {
   assert.equal(pageSource.includes("已成功装载待拆解视频源"), false);
   assert.match(pageSource, /videoParseStatus/);

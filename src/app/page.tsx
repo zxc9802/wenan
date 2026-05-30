@@ -1130,12 +1130,18 @@ export default function Home() {
 你的任务是解析并高保真还原一个商业爆款短视频（通常为老黄这类商业大咖口播、老板IP转型、组织效率提升、AI赋能企业管理的视频）。
 当前用户已上传视频文件，文件名称为: "${uploadedVideoName || "高手口播参考视频"}"。
 ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真实音轨原文】：\n"""\n${transcriptText}\n"""\n请基于该真实文案和视频画面进行极其严谨的骨架结构分析。` : `请只依据视频本体里的画面、声音、字幕和节奏进行分析。若无法读取视频本体，请返回 {"error":"无法读取视频本体"}，禁止仅根据文件名脑补或编造默认拆解内容。`}
+【原视频口播文案硬性要求】
+- content 字段必须逐字转写原视频口播，清楚听到的原话必须逐字保留，按原顺序输出。
+- 听不清的小片段可以结合上下文补成自然完整句子，但只允许补全模糊缺口。
+- 不得借补全名义总结、改写、扩写清楚听到的内容，不得为了更像爆款文案而重写整段。
+- 如果视频没有口播，用 [无口播]。
+- 其他字段可以做结构分析，但不能反向改写 content 字段。
 必须返回严格的 JSON 对象，包含以下字段，并且不要有任何 Markdown 包裹标记：
 {
   "author": "提取出的视频发言人/博主，如：老黄·实战派CEO 或 商业大咖",
   "title": "爆款视频的吸睛标题，需与上传视频“${uploadedVideoName}”及内容高度关联",
   "reason": "爆款诱因分析，一句话说透为什么会火，如：痛点抛出极具攻击性，反常识结论极其吸睛，精准击中管理硬伤",
-  "content": "完全复原的高手原文字句，需贴合音轨或视频名，必须非常直白、口语化，比如：‘别再自嗨了！你买再多的AI工具，自己公司连SOP流程都没有...’，字句要完整口播化",
+  "content": "逐字转写原视频口播；清楚听到的原话必须逐字保留；听不清的小片段可以结合上下文补成自然完整句子；不得借补全名义总结、改写、扩写清楚听到的内容",
   "visualHook": "1. 黄金 Hook 画面动作设定 (3秒视觉冲击)，如：视频开头指着镜头拍桌，伴随警报音效，大字报弹出《避坑指南》",
   "emotionCurve": "2. 情绪温度曲线推进，如：极度痛惜(0-15s) → 理性痛击(15-45s) → 诚恳同行人揭秘(45s-结尾)",
   "conflictFriction": "3. 戏剧冲突摩擦细节，如：员工每天忙着调戏AI助手 VS 核心业务流程零沉淀",
@@ -1145,9 +1151,9 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
   "conversionHook": "7. 私域留资动作引流动作，如：评论区二收，回复“转型”即可免费领《老板AI转型SOP避坑表》"
 }`;
 
-        const prompt = `${systemPrompt}\n\n请直接基于这个视频本体（画面、声音、字幕、节奏）进行深层结构剖析，返回严格 JSON。`;
+        const prompt = `${systemPrompt}\n\n请先逐字转写 content 字段，再基于视频本体（画面、声音、字幕、节奏）进行结构剖析，返回严格 JSON。`;
         setParsingVideoStep("正在把本地视频上传到服务端并转换为 Gemini inline_data...");
-        const formData = createVideoParseFormData(matVideoFile, uploadedVideoName || "video.mp4", prompt, 0.7);
+        const formData = createVideoParseFormData(matVideoFile, uploadedVideoName || "video.mp4", prompt, 0.1);
         setParsingVideoStep("视频已交给服务端，正在等待 Gemini 读取视频本体...");
         const response = await fetch("/api/llm/video", {
           method: "POST",
