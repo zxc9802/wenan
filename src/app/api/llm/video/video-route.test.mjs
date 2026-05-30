@@ -83,16 +83,17 @@ test("Gemini video route accepts multipart uploads and sends native Gemini inlin
   assert.match(routeSource, /inline_data/);
 });
 
-test("Gemini video route compresses large uploads server-side before inline base64", () => {
+test("Gemini video route sends original multipart uploads as inline base64 without compression", () => {
   const routeSource = readFileSync(routeUrl, "utf8");
-  assert.match(packageSource, /"ffmpeg-static"/);
-  assert.match(routeSource, /ffmpeg-static/);
-  assert.match(routeSource, /TARGET_VIDEO_INLINE_BYTES\s*=\s*12\s*\*\s*1024\s*\*\s*1024/);
-  assert.match(routeSource, /MAX_VIDEO_INLINE_BYTES\s*=\s*14\s*\*\s*1024\s*\*\s*1024/);
   assert.match(routeSource, /videoBuffer\?: Buffer/);
-  assert.match(routeSource, /compressVideoForGeminiInlineData/);
-  assert.match(routeSource, /prepareVideoForGeminiInlineData/);
-  assert.match(routeSource, /base64Data: preparedVideo\.buffer\.toString\("base64"\)/);
+  assert.match(routeSource, /base64Data: body\.videoBuffer\.toString\("base64"\)/);
+  assert.doesNotMatch(packageSource, /"ffmpeg-static"/);
+  assert.doesNotMatch(routeSource, /from "node:child_process"/);
+  assert.doesNotMatch(routeSource, /from "node:fs\/promises"/);
+  assert.doesNotMatch(routeSource, /from "node:os"/);
+  assert.doesNotMatch(routeSource, /ffmpeg-static/);
+  assert.doesNotMatch(routeSource, /TARGET_VIDEO_INLINE_BYTES|MAX_VIDEO_INLINE_BYTES|VIDEO_TRANSCODE_TIMEOUT_MS/);
+  assert.doesNotMatch(routeSource, /compressVideoForGeminiInlineData|prepareVideoForGeminiInlineData/);
 });
 
 test("Gemini video route creates background jobs and exposes polling status", () => {

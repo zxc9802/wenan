@@ -1,6 +1,3 @@
-import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { NextResponse } from "next/server";
 import { sessionErrorResponse } from "@/app/lib/server/app-session";
 
@@ -69,15 +66,9 @@ type VideoParseJob = {
 
 const FLASH_ATTEMPTS = 3;
 const GEMINI_VIDEO_TIMEOUT_MS = Number.parseInt(process.env.GEMINI_VIDEO_TIMEOUT_MS || "300000", 10) || 300000;
-const TARGET_VIDEO_INLINE_BYTES = 12 * 1024 * 1024;
-const MAX_VIDEO_INLINE_BYTES = 14 * 1024 * 1024;
-const VIDEO_TRANSCODE_TIMEOUT_MS = Number.parseInt(process.env.VIDEO_TRANSCODE_TIMEOUT_MS || "240000", 10) || 240000;
 const VIDEO_PARSE_JOB_TTL_MS = 30 * 60 * 1000;
 const MAX_VIDEO_PARSE_JOBS = 50;
 const videoParseJobs = ((globalThis as typeof globalThis & { __copywritingVideoParseJobs?: Map<string, VideoParseJob> }).__copywritingVideoParseJobs ||= new Map<string, VideoParseJob>());
-const bundledFfmpegPath = process.platform === "win32"
-  ? "node_modules\\ffmpeg-static\\ffmpeg.exe"
-  : "node_modules/ffmpeg-static/ffmpeg";
 
 function cleanBaseUrl(value: string) {
   return value.trim().replace(/\/+$/, "");
@@ -220,148 +211,14 @@ async function parseVideoRequest(request: Request) {
   return parseJsonVideoRequest(request);
 }
 
-type FfmpegResult = {
-  stdout: string;
-  stderr: string;
-};
-
-function getFfmpegPath() {
-  return process.env.FFMPEG_PATH || bundledFfmpegPath || "ffmpeg";
-}
-
-function runFfmpeg(args: string[], options: { timeoutMs?: number; allowFailure?: boolean } = {}): Promise<FfmpegResult> {
-  const timeoutMs = options.timeoutMs || VIDEO_TRANSCODE_TIMEOUT_MS;
-
-  return new Promise((resolve, reject) => {
-    const child = spawn(getFfmpegPath(), args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(createHttpError("服务端视频压缩超时，请上传更短的视频", 504));
-    }, timeoutMs);
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(createHttpError("服务端视频压缩组件不可用", 500, { message: error.message }));
-    });
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      if (code === 0 || options.allowFailure) {
-        resolve({ stdout, stderr });
-        return;
-      }
-      reject(createHttpError("服务端视频压缩失败", 500, { code, stderr: stderr.slice(-2000) }));
-    });
-  });
-}
-
-function parseFfmpegDuration(stderr: string) {
-  const match = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
-  if (!match) return 0;
-  const hours = Number.parseInt(match[1] || "0", 10);
-  const minutes = Number.parseInt(match[2] || "0", 10);
-  const seconds = Number.parseFloat(match[3] || "0");
-  const duration = hours * 3600 + minutes * 60 + seconds;
-  return Number.isFinite(duration) ? duration : 0;
-}
-
-async function probeVideoDuration(inputPath: string) {
-  const result = await runFfmpeg(["-hide_banner", "-i", inputPath], {
-    timeoutMs: 30000,
-    allowFailure: true,
-  });
-  return parseFfmpegDuration(result.stderr);
-}
-
-function calculateVideoBitrateKbps(durationSeconds: number) {
-  if (!durationSeconds || durationSeconds <= 0) return 420;
-  const targetTotalKbps = Math.floor((TARGET_VIDEO_INLINE_BYTES * 8 * 0.9) / durationSeconds / 1000);
-  return Math.min(650, Math.max(120, targetTotalKbps - 48));
-}
-
-async function compressVideoForGeminiInlineData(videoBuffer: Buffer, mimeType: string) {
-  if (videoBuffer.byteLength <= TARGET_VIDEO_INLINE_BYTES) {
-    return { buffer: videoBuffer, mimeType };
-  }
-
-  const tempDir = await mkdtemp(`${tmpdir()}/copywriting-video-`);
-  const inputPath = `${tempDir}/input-video`;
-  const outputPath = `${tempDir}/output.mp4`;
-
-  try {
-    await writeFile(inputPath, videoBuffer);
-    const durationSeconds = await probeVideoDuration(inputPath);
-    const videoBitrateKbps = calculateVideoBitrateKbps(durationSeconds);
-
-    await runFfmpeg([
-      "-y",
-      "-i",
-      inputPath,
-      "-map",
-      "0:v:0",
-      "-map",
-      "0:a:0?",
-      "-vf",
-      "scale=-2:360,fps=15",
-      "-c:v",
-      "libx264",
-      "-preset",
-      "veryfast",
-      "-b:v",
-      `${videoBitrateKbps}k`,
-      "-maxrate",
-      `${Math.round(videoBitrateKbps * 1.25)}k`,
-      "-bufsize",
-      `${Math.round(videoBitrateKbps * 2)}k`,
-      "-pix_fmt",
-      "yuv420p",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "48k",
-      "-ac",
-      "1",
-      "-movflags",
-      "+faststart",
-      outputPath,
-    ]);
-
-    const compressedBuffer = await readFile(outputPath);
-    const bestBuffer = compressedBuffer.byteLength < videoBuffer.byteLength ? compressedBuffer : videoBuffer;
-    if (bestBuffer.byteLength > MAX_VIDEO_INLINE_BYTES) {
-      throw createHttpError("视频压缩后仍超过 Gemini inline_data 稳定上限，请上传更短的视频", 413, {
-        originalBytes: videoBuffer.byteLength,
-        compressedBytes: compressedBuffer.byteLength,
-        maxBytes: MAX_VIDEO_INLINE_BYTES,
-      });
-    }
-
-    return { buffer: bestBuffer, mimeType: bestBuffer === compressedBuffer ? "video/mp4" : mimeType };
-  } finally {
-    await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
-async function prepareVideoForGeminiInlineData(body: ResolvedVideoParseRequestBody): Promise<ResolvedVideoParseRequestBody> {
+function withOriginalVideoInlineData(body: ResolvedVideoParseRequestBody): ResolvedVideoParseRequestBody {
   if (!body.videoBuffer) {
     return body;
   }
 
-  const preparedVideo = await compressVideoForGeminiInlineData(body.videoBuffer, body.mimeType);
   return {
-    mimeType: preparedVideo.mimeType,
-    base64Data: preparedVideo.buffer.toString("base64"),
+    mimeType: body.mimeType,
+    base64Data: body.videoBuffer.toString("base64"),
     videoUrl: body.videoUrl,
     prompt: body.prompt,
     temperature: body.temperature,
@@ -630,8 +487,8 @@ async function processVideoParseJob(
   updateVideoParseJob(jobId, { status: "running" });
 
   try {
-    const preparedRequestBody = await prepareVideoForGeminiInlineData(requestBody);
-    const result = await runGeminiVideoParse(preparedRequestBody, config, (attempts) => {
+    const inlineRequestBody = withOriginalVideoInlineData(requestBody);
+    const result = await runGeminiVideoParse(inlineRequestBody, config, (attempts) => {
       updateVideoParseJob(jobId, { attempts });
     });
     updateVideoParseJob(jobId, { status: "succeeded", result, attempts: result._attempts });
