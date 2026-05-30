@@ -140,12 +140,6 @@ type VideoParseContent = {
   conversionHook: string;
 };
 
-type R2VideoUploadResponse = {
-  success?: boolean;
-  objectKey?: string;
-  error?: string;
-};
-
 interface BatchArticleResult {
   id: string;
   title: string;
@@ -910,13 +904,12 @@ export default function Home() {
   };
 
   const getDataUrlPayload = (dataurl: string) => {
-    const match = dataurl.match(/^data:([^;]+);base64,(.*)$/);
+    const match = dataurl.match(/^data:([^;]+);base64,/);
     if (!match) {
       throw new Error("视频数据格式异常，请重新上传视频");
     }
     return {
       mimeType: match[1] || "video/mp4",
-      base64Data: match[2],
     };
   };
 
@@ -963,7 +956,7 @@ export default function Home() {
     return normalized;
   };
 
-  const uploadVideoToR2 = async (dataUrl: string, fileName: string) => {
+  const createVideoParseFormData = (dataUrl: string, fileName: string, prompt: string, temperature = 0.7) => {
     const payload = getDataUrlPayload(dataUrl);
     const blob = dataURLtoBlob(dataUrl);
     if (!blob.size) {
@@ -973,21 +966,10 @@ export default function Home() {
     const file = new File([blob], fileName || "video.mp4", { type: payload.mimeType });
     const formData = new FormData();
     formData.append("file", file);
-
-    const uploadResponse = await fetch("/api/r2/video-upload", {
-      method: "POST",
-      body: formData,
-    });
-    const uploadData = await uploadResponse.json().catch(() => ({})) as R2VideoUploadResponse;
-
-    if (!uploadResponse.ok || !uploadData.objectKey) {
-      throw new Error(uploadData.error || `R2 上传失败 (状态码 ${uploadResponse.status})`);
-    }
-
-    return {
-      mimeType: payload.mimeType,
-      objectKey: uploadData.objectKey,
-    };
+    formData.append("mimeType", payload.mimeType);
+    formData.append("prompt", prompt);
+    formData.append("temperature", String(temperature));
+    return formData;
   };
 
   const hasClientLlmConfig = () => false;
@@ -1123,20 +1105,13 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
   "conversionHook": "7. 私域留资动作引流动作，如：评论区二收，回复“转型”即可免费领《老板AI转型SOP避坑表》"
 }`;
 
-        setParsingVideoStep("正在上传视频到 Cloudflare R2 临时对象存储...");
-        const videoPayload = await uploadVideoToR2(matVideoFile, uploadedVideoName || "video.mp4");
-        setParsingVideoStep("R2 临时视频 URL 已生成，正在交给 Gemini 读取视频本体...");
+        const prompt = `${systemPrompt}\n\n请直接基于这个视频本体（画面、声音、字幕、节奏）进行深层结构剖析，返回严格 JSON。`;
+        setParsingVideoStep("正在把本地视频上传到服务端并转换为 Gemini inline_data...");
+        const formData = createVideoParseFormData(matVideoFile, uploadedVideoName || "video.mp4", prompt, 0.7);
+        setParsingVideoStep("视频已交给服务端，正在等待 Gemini 读取视频本体...");
         const response = await fetch("/api/llm/video", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            mimeType: videoPayload.mimeType,
-            objectKey: videoPayload.objectKey,
-            prompt: `${systemPrompt}\n\n请直接基于这个视频本体（画面、声音、字幕、节奏）进行深层结构剖析，返回严格 JSON。`,
-            temperature: 0.7
-          })
+          body: formData
         });
 
         if (response.ok) {

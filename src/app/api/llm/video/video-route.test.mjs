@@ -8,9 +8,11 @@ const pageSource = readFileSync(new URL("../../../page.tsx", import.meta.url), "
 test("video parser posts uploaded local video to the server-side Gemini video route", () => {
   assert.match(pageSource, /fetch\("\/api\/llm\/video"/);
   assert.match(pageSource, /mimeType/);
-  assert.match(pageSource, /objectKey/);
-  assert.match(pageSource, /fetch\("\/api\/r2\/video-upload"/);
   assert.match(pageSource, /FormData/);
+  assert.match(pageSource, /formData\.append\("file"/);
+  assert.match(pageSource, /formData\.append\("prompt"/);
+  assert.match(pageSource, /formData\.append\("temperature"/);
+  assert.doesNotMatch(pageSource, /fetch\("\/api\/r2\/video-upload"/);
   assert.doesNotMatch(pageSource, /presignData\.uploadUrl/);
 });
 
@@ -49,10 +51,26 @@ test("Gemini video route supports OpenAI-compatible video chat completions", () 
   assert.match(routeSource, /body\.videoUrl/);
 });
 
-test("video parser deletes R2 temp object after model parsing finishes", () => {
+test("Gemini video route accepts multipart uploads and sends native Gemini inline base64", () => {
   const routeSource = readFileSync(routeUrl, "utf8");
-  assert.match(routeSource, /deleteTempR2Object/);
-  assert.match(routeSource, /finally/);
+  assert.match(routeSource, /request\.formData\(\)/);
+  assert.match(routeSource, /file\.arrayBuffer\(\)/);
+  assert.match(routeSource, /base64Data/);
+  assert.match(routeSource, /inline_data/);
+});
+
+test("Gemini video route defaults shanbaob video calls to native Gemini protocol", () => {
+  const routeSource = readFileSync(routeUrl, "utf8");
+  assert.match(routeSource, /shanbaob\.net/);
+  assert.match(routeSource, /return "google"/);
+});
+
+test("Gemini video route extends execution and upstream fetch timeout for base64 video parsing", () => {
+  const routeSource = readFileSync(routeUrl, "utf8");
+  assert.match(routeSource, /export const maxDuration\s*=\s*300/);
+  assert.match(routeSource, /GEMINI_VIDEO_TIMEOUT_MS\s*=/);
+  assert.match(routeSource, /AbortController/);
+  assert.match(routeSource, /signal: controller\.signal/);
 });
 
 test("video parser rejects incomplete model output instead of filling local defaults", () => {
