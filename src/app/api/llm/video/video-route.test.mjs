@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 
 const routeUrl = new URL("./route.ts", import.meta.url);
 const pageSource = readFileSync(new URL("../../../page.tsx", import.meta.url), "utf8");
+const packageSource = readFileSync(new URL("../../../../../package.json", import.meta.url), "utf8");
 
 test("video parser posts uploaded local video to the server-side Gemini video route", () => {
   assert.match(pageSource, /fetch\("\/api\/llm\/video"/);
@@ -14,6 +15,10 @@ test("video parser posts uploaded local video to the server-side Gemini video ro
   assert.match(pageSource, /formData\.append\("temperature"/);
   assert.doesNotMatch(pageSource, /fetch\("\/api\/r2\/video-upload"/);
   assert.doesNotMatch(pageSource, /presignData\.uploadUrl/);
+});
+
+test("video parser UI does not show a compression step", () => {
+  assert.doesNotMatch(pageSource, /正在[^"`]*压缩|压缩中/);
 });
 
 test("video parser polls a background parse job instead of waiting on the initial request", () => {
@@ -76,6 +81,18 @@ test("Gemini video route accepts multipart uploads and sends native Gemini inlin
   assert.match(routeSource, /file\.arrayBuffer\(\)/);
   assert.match(routeSource, /base64Data/);
   assert.match(routeSource, /inline_data/);
+});
+
+test("Gemini video route compresses large uploads server-side before inline base64", () => {
+  const routeSource = readFileSync(routeUrl, "utf8");
+  assert.match(packageSource, /"ffmpeg-static"/);
+  assert.match(routeSource, /ffmpeg-static/);
+  assert.match(routeSource, /TARGET_VIDEO_INLINE_BYTES\s*=\s*12\s*\*\s*1024\s*\*\s*1024/);
+  assert.match(routeSource, /MAX_VIDEO_INLINE_BYTES\s*=\s*14\s*\*\s*1024\s*\*\s*1024/);
+  assert.match(routeSource, /videoBuffer\?: Buffer/);
+  assert.match(routeSource, /compressVideoForGeminiInlineData/);
+  assert.match(routeSource, /prepareVideoForGeminiInlineData/);
+  assert.match(routeSource, /base64Data: preparedVideo\.buffer\.toString\("base64"\)/);
 });
 
 test("Gemini video route creates background jobs and exposes polling status", () => {
