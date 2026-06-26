@@ -1027,7 +1027,7 @@ export default function Home() {
     data._provider || fallback;
 
   const readChatCompletionModel = (data: { _model?: string }) =>
-    data._model || "Gemini 视频模型";
+    data._model || "视频解析模型";
 
   const pollVideoParseJob = async (jobId: string) => {
     const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -1053,7 +1053,7 @@ export default function Home() {
       }
 
       if (attempt % 4 === 0) {
-        setParsingVideoStep(`Gemini 正在后台解析视频，本页持续等待中... 已轮询 ${attempt} 次`);
+        setParsingVideoStep(`视频解析模型正在后台处理视频，本页持续等待中... 已轮询 ${attempt} 次`);
       }
     }
 
@@ -1120,7 +1120,7 @@ export default function Home() {
       if (transcriptText) {
         setParsingVideoStep(`ASR 识别成功！已提取 ${transcriptText.slice(0, 20)}... 正在调用【${apiModel}】分析文案结构...`);
       } else {
-        setParsingVideoStep(`正在将本地视频交给 Gemini【gemini-3.5-flash】多模态解析，连续失败 3 次后自动切换 gemini-3.1-pro...`);
+        setParsingVideoStep("正在将本地视频交给视频解析模型，主模型连续失败 5 次后自动切换豆包备用模型...");
       }
       await delay(1000);
 
@@ -1152,9 +1152,9 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
 }`;
 
         const prompt = `${systemPrompt}\n\n请先逐字转写 content 字段，再基于视频本体（画面、声音、字幕、节奏）进行结构剖析，返回严格 JSON。`;
-        setParsingVideoStep("正在把本地视频上传到服务端并转换为 Gemini inline_data...");
+        setParsingVideoStep("正在把本地视频上传到服务端并转换为模型可读取的视频输入...");
         const formData = createVideoParseFormData(matVideoFile, uploadedVideoName || "video.mp4", prompt, 0.1);
-        setParsingVideoStep("视频已交给服务端，正在等待 Gemini 读取视频本体...");
+        setParsingVideoStep("视频已交给服务端，正在等待视频解析模型读取视频本体...");
         const response = await fetch("/api/llm/video", {
           method: "POST",
           body: formData
@@ -1166,7 +1166,7 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
             throw new Error("视频解析任务创建失败：服务端未返回 jobId");
           }
 
-          setParsingVideoStep("视频解析任务已创建，正在后台调用 Gemini，页面将自动轮询结果...");
+          setParsingVideoStep("视频解析任务已创建，正在后台调用视频解析模型，页面将自动轮询结果...");
           const resData = await pollVideoParseJob(initialData.jobId);
           const rawContent = readChatCompletionContent(resData as { choices?: { message?: { content?: string } }[] });
           const usedModel = readChatCompletionModel(resData as { _model?: string });
@@ -1185,7 +1185,7 @@ ${transcriptText ? `通过 Whisper 语音识别已为你提取该视频的【真
           setMatVideoConversionHook(content.conversionHook);
 
           setVideoParseStatus("parsed");
-          showToast(`已成功调用 Gemini 视频模型【${usedModel}】为您解析视频！`, "success");
+          showToast(`已成功调用视频解析模型【${usedModel}】为您解析视频！`, "success");
         } else {
           const errBody = await response.text();
           throw new Error(`API 响应失败 (状态码 ${response.status}): ${errBody.slice(0, 100)}`);

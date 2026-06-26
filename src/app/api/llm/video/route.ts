@@ -37,10 +37,22 @@ type OpenAiChatCompletionResponse = {
   }[];
 };
 
+type VideoProvider = "gemini" | "doubao";
 type GeminiVideoProtocol = "google" | "openai";
+type VideoProviderConfig = {
+  provider: VideoProvider;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  protocol: GeminiVideoProtocol;
+};
+type VideoParseConfig = {
+  primary: VideoProviderConfig;
+  fallback: VideoProviderConfig;
+};
 type VideoParseJobStatus = "queued" | "running" | "succeeded" | "failed";
 type VideoParseAttempt = {
-  provider: "gemini";
+  provider: VideoProvider;
   model: string;
   attempt: number;
   status?: number;
@@ -49,7 +61,7 @@ type VideoParseAttempt = {
 };
 type VideoParseCompletionPayload = {
   choices: { message: { content: string } }[];
-  _provider: "gemini";
+  _provider: VideoProvider;
   _model: string;
   _fallbackUsed: boolean;
   _attempts: VideoParseAttempt[];
@@ -64,7 +76,7 @@ type VideoParseJob = {
   detail?: unknown;
 };
 
-const FLASH_ATTEMPTS = 3;
+const PRIMARY_VIDEO_ATTEMPTS = 5;
 const GEMINI_VIDEO_TIMEOUT_MS = Number.parseInt(process.env.GEMINI_VIDEO_TIMEOUT_MS || "300000", 10) || 300000;
 const VIDEO_PARSE_JOB_TTL_MS = 30 * 60 * 1000;
 const MAX_VIDEO_PARSE_JOBS = 50;
@@ -111,15 +123,25 @@ function inferGeminiVideoProtocol(baseUrl: string): GeminiVideoProtocol {
   return "openai";
 }
 
-function getGeminiVideoConfig() {
-  const baseUrl = process.env.GEMINI_VIDEO_API_BASE_URL || process.env.GEMINI_API_BASE_URL || "https://generativelanguage.googleapis.com/v1beta";
+function getVideoParseConfig(): VideoParseConfig {
+  const geminiBaseUrl = process.env.GEMINI_VIDEO_API_BASE_URL || process.env.GEMINI_API_BASE_URL || "https://yunwu.ai/v1";
+  const doubaoBaseUrl = process.env.DOUBAO_VIDEO_API_BASE_URL || process.env.DOUBAO_API_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3";
 
   return {
-    apiKey: process.env.GEMINI_VIDEO_API_KEY || process.env.GEMINI_API_KEY || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "",
-    baseUrl,
-    primaryModel: process.env.GEMINI_VIDEO_MODEL || process.env.GEMINI_MODEL || "gemini-3.5-flash",
-    fallbackModel: process.env.GEMINI_VIDEO_FALLBACK_MODEL || process.env.GEMINI_FALLBACK_MODEL || "gemini-3.1-pro",
-    protocol: (process.env.GEMINI_VIDEO_API_PROTOCOL as GeminiVideoProtocol | undefined) || inferGeminiVideoProtocol(baseUrl),
+    primary: {
+      provider: "gemini",
+      apiKey: process.env.GEMINI_VIDEO_API_KEY || process.env.GEMINI_API_KEY || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "",
+      baseUrl: geminiBaseUrl,
+      model: process.env.GEMINI_VIDEO_MODEL || process.env.GEMINI_MODEL || "gemini-3.5-flash",
+      protocol: (process.env.GEMINI_VIDEO_API_PROTOCOL as GeminiVideoProtocol | undefined) || inferGeminiVideoProtocol(geminiBaseUrl),
+    },
+    fallback: {
+      provider: "doubao",
+      apiKey: process.env.DOUBAO_VIDEO_API_KEY || process.env.DOUBAO_API_KEY || "",
+      baseUrl: doubaoBaseUrl,
+      model: process.env.DOUBAO_VIDEO_MODEL || process.env.DOUBAO_MODEL || "doubao-seed-2-1-pro-260628",
+      protocol: (process.env.DOUBAO_VIDEO_API_PROTOCOL as GeminiVideoProtocol | undefined) || "openai",
+    },
   };
 }
 
@@ -225,7 +247,7 @@ function withOriginalVideoInlineData(body: ResolvedVideoParseRequestBody): Resol
   };
 }
 
-async function fetchWithGeminiTimeout(url: string, init: RequestInit, model: string) {
+async function fetchWithVideoTimeout(url: string, init: RequestInit, model: string) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), GEMINI_VIDEO_TIMEOUT_MS);
 
@@ -259,7 +281,7 @@ async function resolveVideoUrl(body: ResolvedVideoParseRequestBody) {
   throw new Error("缺少可供模型读取的视频数据");
 }
 
-async function callGoogleGeminiVideo(body: ResolvedVideoParseRequestBody, model: string, config: ReturnType<typeof getGeminiVideoConfig>) {
+async function callGoogleGeminiVideo(body: ResolvedVideoParseRequestBody, config: VideoProviderConfig) {
   const videoPart = body.base64Data
     ? {
         inline_data: {
@@ -274,7 +296,7 @@ async function callGoogleGeminiVideo(body: ResolvedVideoParseRequestBody, model:
         },
       };
 
-  const upstream = await fetchWithGeminiTimeout(buildGenerateContentUrl(config.baseUrl, model), {
+  const upstream = await fetchWithVideoTimeout(buildGenerateContentUrl(config.baseUrl, config.model), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -297,18 +319,18 @@ async function callGoogleGeminiVideo(body: ResolvedVideoParseRequestBody, model:
         responseMimeType: "application/json",
       },
     }),
-  }, model);
+  }, config.model);
 
   const data = await upstream.json().catch(async () => ({ raw: await upstream.text().catch(() => "") }));
   if (!upstream.ok) {
-    const error = new Error(`${model} 视频解析调用失败`);
+    const error = new Error(`${config.model} 视频解析调用失败`);
     Object.assign(error, { status: upstream.status, detail: data });
     throw error;
   }
 
   const content = readGeminiText(data as GeminiGenerateContentResponse);
   if (!content.trim()) {
-    const error = new Error(`${model} 未返回可解析内容`);
+    const error = new Error(`${config.model} 未返回可解析内容`);
     Object.assign(error, { status: 502, detail: data });
     throw error;
   }
@@ -316,17 +338,17 @@ async function callGoogleGeminiVideo(body: ResolvedVideoParseRequestBody, model:
   return content;
 }
 
-async function callOpenAiCompatibleVideo(body: ResolvedVideoParseRequestBody, model: string, config: ReturnType<typeof getGeminiVideoConfig>) {
+async function callOpenAiCompatibleVideo(body: ResolvedVideoParseRequestBody, config: VideoProviderConfig) {
   const videoUrl = await resolveVideoUrl(body);
 
-  const upstream = await fetchWithGeminiTimeout(buildOpenAiChatCompletionsUrl(config.baseUrl), {
+  const upstream = await fetchWithVideoTimeout(buildOpenAiChatCompletionsUrl(config.baseUrl), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${config.apiKey}`,
     },
     body: JSON.stringify({
-      model,
+      model: config.model,
       messages: [
         {
           role: "user",
@@ -347,18 +369,18 @@ async function callOpenAiCompatibleVideo(body: ResolvedVideoParseRequestBody, mo
       temperature: body.temperature,
       response_format: { type: "json_object" },
     }),
-  }, model);
+  }, config.model);
 
   const data = await upstream.json().catch(async () => ({ raw: await upstream.text().catch(() => "") }));
   if (!upstream.ok) {
-    const error = new Error(`${model} OpenAI 兼容视频解析调用失败`);
+    const error = new Error(`${config.model} OpenAI 兼容视频解析调用失败`);
     Object.assign(error, { status: upstream.status, detail: data });
     throw error;
   }
 
   const content = (data as OpenAiChatCompletionResponse).choices?.[0]?.message?.content || "";
   if (!content.trim()) {
-    const error = new Error(`${model} 未返回可解析内容`);
+    const error = new Error(`${config.model} 未返回可解析内容`);
     Object.assign(error, { status: 502, detail: data });
     throw error;
   }
@@ -366,11 +388,14 @@ async function callOpenAiCompatibleVideo(body: ResolvedVideoParseRequestBody, mo
   return content;
 }
 
-async function callGeminiVideo(body: ResolvedVideoParseRequestBody, model: string) {
-  const config = getGeminiVideoConfig();
+async function callVideoProvider(body: ResolvedVideoParseRequestBody, config: VideoProviderConfig) {
+  if (!config.apiKey) {
+    throw createHttpError(`${config.provider} 视频解析未配置 API Key`, 500);
+  }
+
   return config.protocol === "openai"
-    ? callOpenAiCompatibleVideo(body, model, config)
-    : callGoogleGeminiVideo(body, model, config);
+    ? callOpenAiCompatibleVideo(body, config)
+    : callGoogleGeminiVideo(body, config);
 }
 
 function cleanupExpiredVideoParseJobs() {
@@ -419,9 +444,9 @@ function serializeVideoParseJob(jobId: string, job: VideoParseJob) {
   };
 }
 
-async function runGeminiVideoParse(
+async function runVideoParse(
   requestBody: ResolvedVideoParseRequestBody,
-  config: ReturnType<typeof getGeminiVideoConfig>,
+  config: VideoParseConfig,
   onAttemptsChange?: (attempts: VideoParseAttempt[]) => void
 ): Promise<VideoParseCompletionPayload> {
   const attempts: VideoParseAttempt[] = [];
@@ -430,20 +455,20 @@ async function runGeminiVideoParse(
     onAttemptsChange?.([...attempts]);
   };
 
-  for (let attempt = 1; attempt <= FLASH_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= PRIMARY_VIDEO_ATTEMPTS; attempt += 1) {
     try {
-      const content = await callGeminiVideo(requestBody, config.primaryModel);
+      const content = await callVideoProvider(requestBody, config.primary);
       return {
         choices: [{ message: { content } }],
-        _provider: "gemini",
-        _model: config.primaryModel,
+        _provider: config.primary.provider,
+        _model: config.primary.model,
         _fallbackUsed: attempts.length > 0,
         _attempts: attempts,
       };
     } catch (error) {
       recordAttempt({
-        provider: "gemini",
-        model: config.primaryModel,
+        provider: config.primary.provider,
+        model: config.primary.model,
         attempt,
         status: errorStatus(error),
         error: error instanceof Error ? error.message : String(error),
@@ -453,18 +478,18 @@ async function runGeminiVideoParse(
   }
 
   try {
-    const content = await callGeminiVideo(requestBody, config.fallbackModel);
+    const content = await callVideoProvider(requestBody, config.fallback);
     return {
       choices: [{ message: { content } }],
-      _provider: "gemini",
-      _model: config.fallbackModel,
+      _provider: config.fallback.provider,
+      _model: config.fallback.model,
       _fallbackUsed: true,
       _attempts: attempts,
     };
   } catch (error) {
     recordAttempt({
-      provider: "gemini",
-      model: config.fallbackModel,
+      provider: config.fallback.provider,
+      model: config.fallback.model,
       attempt: 1,
       status: errorStatus(error),
       error: error instanceof Error ? error.message : String(error),
@@ -473,7 +498,7 @@ async function runGeminiVideoParse(
   }
 
   throw createHttpError(
-    "Gemini 视频解析失败，flash 重试 3 次且 pro 备用模型也未能接管",
+    "视频解析失败，云雾 Gemini 重试 5 次且豆包备用模型也未能接管",
     attempts.find((attempt) => attempt.status && attempt.status >= 500)?.status || 500,
     { attempts }
   );
@@ -482,13 +507,13 @@ async function runGeminiVideoParse(
 async function processVideoParseJob(
   jobId: string,
   requestBody: ResolvedVideoParseRequestBody,
-  config: ReturnType<typeof getGeminiVideoConfig>
+  config: VideoParseConfig
 ) {
   updateVideoParseJob(jobId, { status: "running" });
 
   try {
     const inlineRequestBody = withOriginalVideoInlineData(requestBody);
-    const result = await runGeminiVideoParse(inlineRequestBody, config, (attempts) => {
+    const result = await runVideoParse(inlineRequestBody, config, (attempts) => {
       updateVideoParseJob(jobId, { attempts });
     });
     updateVideoParseJob(jobId, { status: "succeeded", result, attempts: result._attempts });
@@ -544,10 +569,10 @@ export async function POST(request: Request) {
     const sessionError = await sessionErrorResponse(request);
     if (sessionError) return sessionError;
 
-    const config = getGeminiVideoConfig();
-    if (!config.apiKey) {
+    const config = getVideoParseConfig();
+    if (!config.primary.apiKey && !config.fallback.apiKey) {
       return NextResponse.json(
-        { success: false, error: "Gemini 视频解析未配置 API Key" },
+        { success: false, error: "视频解析未配置 API Key" },
         { status: 500 }
       );
     }

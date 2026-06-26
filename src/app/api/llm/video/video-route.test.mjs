@@ -47,7 +47,7 @@ test("video upload status is distinct from parsed-and-filled status", () => {
   assert.match(pageSource, /AI 已解析并回填右侧字段/);
 });
 
-test("Gemini video route tries flash three times before pro fallback", () => {
+test("video route tries Yunwu Gemini five times before Doubao fallback", () => {
   assert.equal(existsSync(routeUrl), true, "video route should exist");
 
   const routeSource = readFileSync(routeUrl, "utf8");
@@ -55,12 +55,14 @@ test("Gemini video route tries flash three times before pro fallback", () => {
   assert.match(routeSource, /GEMINI_VIDEO_API_BASE_URL \|\| process\.env\.GEMINI_API_BASE_URL/);
   assert.match(routeSource, /GEMINI_VIDEO_MODEL/);
   assert.match(routeSource, /GEMINI_VIDEO_MODEL \|\| process\.env\.GEMINI_MODEL/);
+  assert.match(routeSource, /yunwu\.ai\/v1/);
   assert.match(routeSource, /gemini-3\.5-flash/);
-  assert.match(routeSource, /GEMINI_VIDEO_FALLBACK_MODEL/);
-  assert.match(routeSource, /GEMINI_VIDEO_FALLBACK_MODEL \|\| process\.env\.GEMINI_FALLBACK_MODEL/);
-  assert.match(routeSource, /gemini-3\.1-pro/);
-  assert.match(routeSource, /FLASH_ATTEMPTS\s*=\s*3/);
-  assert.match(routeSource, /for \(let attempt = 1; attempt <= FLASH_ATTEMPTS; attempt \+= 1\)/);
+  assert.match(routeSource, /DOUBAO_VIDEO_API_KEY/);
+  assert.match(routeSource, /DOUBAO_VIDEO_API_BASE_URL/);
+  assert.match(routeSource, /DOUBAO_VIDEO_MODEL/);
+  assert.match(routeSource, /doubao-seed-2-1-pro-260628/);
+  assert.match(routeSource, /PRIMARY_VIDEO_ATTEMPTS\s*=\s*5/);
+  assert.match(routeSource, /for \(let attempt = 1; attempt <= PRIMARY_VIDEO_ATTEMPTS; attempt \+= 1\)/);
 });
 
 test("Gemini video route supports OpenAI-compatible video chat completions", () => {
@@ -73,6 +75,12 @@ test("Gemini video route supports OpenAI-compatible video chat completions", () 
   assert.match(routeSource, /type: "video_url"/);
   assert.match(routeSource, /resolveVideoUrl/);
   assert.match(routeSource, /body\.videoUrl/);
+});
+
+test("video parser status copy does not claim every backend video job is Gemini", () => {
+  assert.doesNotMatch(pageSource, /Gemini 正在后台解析视频/);
+  assert.doesNotMatch(pageSource, /正在等待 Gemini 读取视频本体/);
+  assert.match(pageSource, /视频解析模型正在后台处理视频/);
 });
 
 test("Gemini video route accepts multipart uploads and sends native Gemini inline base64", () => {
