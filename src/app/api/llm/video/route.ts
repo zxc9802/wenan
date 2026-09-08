@@ -1,3 +1,5 @@
+import { meteredFetch, runWithUsageUser } from "@/app/lib/server/main-usage";
+import { assertAppSessionFromRequest } from "@/app/lib/server/app-session";
 import { NextResponse } from "next/server";
 import { sessionErrorResponse } from "@/app/lib/server/app-session";
 
@@ -252,7 +254,7 @@ async function fetchWithVideoTimeout(url: string, init: RequestInit, model: stri
   const timeout = setTimeout(() => controller.abort(), GEMINI_VIDEO_TIMEOUT_MS);
 
   try {
-    return await fetch(url, {
+    return await meteredFetch(url, {
       ...init,
       signal: controller.signal,
     });
@@ -564,7 +566,7 @@ export async function GET(request: Request) {
   }
 }
 
-export async function POST(request: Request) {
+async function handleUsagePost(request: Request) {
   try {
     const sessionError = await sessionErrorResponse(request);
     if (sessionError) return sessionError;
@@ -599,4 +601,12 @@ export async function POST(request: Request) {
       { status }
     );
   }
+}
+
+export async function POST(request: Request) {
+  const error = await sessionErrorResponse(request);
+  if (error) return error;
+  const session = await assertAppSessionFromRequest(request);
+  const userId = typeof session.user.id === "string" ? session.user.id.trim() : "";
+  return runWithUsageUser(userId, () => handleUsagePost(request));
 }

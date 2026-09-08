@@ -1,3 +1,5 @@
+import { meteredFetch, runWithUsageUser } from "@/app/lib/server/main-usage";
+import { assertAppSessionFromRequest } from "@/app/lib/server/app-session";
 import { NextResponse } from "next/server";
 import { sessionErrorResponse } from "@/app/lib/server/app-session";
 
@@ -48,7 +50,7 @@ async function callChatCompletion(provider: LlmProvider, body: ChatRequestBody, 
     throw new Error(`${provider} 未配置 API Key`);
   }
 
-  const upstream = await fetch(`${config.baseUrl}/chat/completions`, {
+  const upstream = await meteredFetch(`${config.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -77,7 +79,7 @@ async function callChatCompletion(provider: LlmProvider, body: ChatRequestBody, 
   return { data, provider, model };
 }
 
-export async function POST(request: Request) {
+async function handleUsagePost(request: Request) {
   try {
     const sessionError = await sessionErrorResponse(request);
     if (sessionError) return sessionError;
@@ -124,4 +126,12 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   }
+}
+
+export async function POST(request: Request) {
+  const error = await sessionErrorResponse(request);
+  if (error) return error;
+  const session = await assertAppSessionFromRequest(request);
+  const userId = typeof session.user.id === "string" ? session.user.id.trim() : "";
+  return runWithUsageUser(userId, () => handleUsagePost(request));
 }
