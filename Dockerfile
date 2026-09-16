@@ -25,6 +25,8 @@ RUN npm ci --omit=dev
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/next.config.ts ./next.config.ts
+COPY --from=builder /app/scripts/usage-retry.mjs ./scripts/usage-retry.mjs
+COPY --from=builder /app/src/app/lib/server/usage-monitor.mjs ./src/app/lib/server/usage-monitor.mjs
 
 EXPOSE 3000
 

@@ -44,3 +44,6 @@ downloaded_videos/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Durable OpenLux reporting metadata
+/data/usage-monitor/
