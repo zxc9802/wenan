@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { sessionErrorResponse, readAppSession, assertAppSessionFromRequest } from "@/app/lib/server/app-session";
-import { usageMonitor } from "@/app/lib/server/usage-monitor.mjs";
+import { sessionErrorResponse } from "@/app/lib/server/app-session";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -68,7 +67,6 @@ type VideoParseCompletionPayload = {
   _attempts: VideoParseAttempt[];
 };
 type VideoParseJob = {
-  userId: unknown;
   status: VideoParseJobStatus;
   createdAt: number;
   updatedAt: number;
@@ -254,7 +252,7 @@ async function fetchWithVideoTimeout(url: string, init: RequestInit, model: stri
   const timeout = setTimeout(() => controller.abort(), GEMINI_VIDEO_TIMEOUT_MS);
 
   try {
-    return await usageMonitor.fetch(url, {
+    return await fetch(url, {
       ...init,
       signal: controller.signal,
     });
@@ -538,7 +536,6 @@ export async function GET(request: Request) {
   try {
     const sessionError = await sessionErrorResponse(request);
     if (sessionError) return sessionError;
-    const session = await assertAppSessionFromRequest(request);
 
     cleanupExpiredVideoParseJobs();
     const jobId = new URL(request.url).searchParams.get("jobId")?.trim() || "";
@@ -550,7 +547,7 @@ export async function GET(request: Request) {
     }
 
     const job = videoParseJobs.get(jobId);
-    if (!job || job.userId !== session.user.id) {
+    if (!job) {
       return NextResponse.json(
         { success: false, error: "视频解析任务不存在或已过期" },
         { status: 404 }
@@ -571,8 +568,6 @@ export async function POST(request: Request) {
   try {
     const sessionError = await sessionErrorResponse(request);
     if (sessionError) return sessionError;
-    const session = await assertAppSessionFromRequest(request);
-    const usageUser = (await readAppSession(request))?.user.id;
 
     const config = getVideoParseConfig();
     if (!config.primary.apiKey && !config.fallback.apiKey) {
@@ -586,13 +581,12 @@ export async function POST(request: Request) {
     cleanupExpiredVideoParseJobs();
     const jobId = crypto.randomUUID();
     videoParseJobs.set(jobId, {
-      userId: session.user.id,
       status: "queued",
       createdAt: Date.now(),
       updatedAt: Date.now(),
       attempts: [],
     });
-    void usageMonitor.run(usageUser, () => processVideoParseJob(jobId, requestBody, config));
+    void processVideoParseJob(jobId, requestBody, config);
 
     return NextResponse.json(
       { success: true, jobId, status: "queued" },

@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { sessionErrorResponse, readAppSession } from "@/app/lib/server/app-session";
-import { usageMonitor } from "@/app/lib/server/usage-monitor.mjs";
+import { sessionErrorResponse } from "@/app/lib/server/app-session";
 
 type LlmProvider = "gemini" | "deepseek";
 
@@ -49,7 +48,7 @@ async function callChatCompletion(provider: LlmProvider, body: ChatRequestBody, 
     throw new Error(`${provider} 未配置 API Key`);
   }
 
-  const upstream = await usageMonitor.fetch(`${config.baseUrl}/chat/completions`, {
+  const upstream = await fetch(`${config.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -82,7 +81,6 @@ export async function POST(request: Request) {
   try {
     const sessionError = await sessionErrorResponse(request);
     if (sessionError) return sessionError;
-    const usageUser = (await readAppSession(request))?.user.id;
 
     const body = (await request.json()) as ChatRequestBody;
     if (!body.messages?.length) {
@@ -96,7 +94,7 @@ export async function POST(request: Request) {
     for (const provider of getProviderOrder(body.preferredProvider, body.fallbackProvider)) {
       for (const model of getProviderConfig(provider).models) {
         try {
-          const { data, provider: usedProvider, model: usedModel } = await usageMonitor.run(usageUser, () => callChatCompletion(provider, body, model));
+          const { data, provider: usedProvider, model: usedModel } = await callChatCompletion(provider, body, model);
           return NextResponse.json({
             ...data,
             _provider: usedProvider,
